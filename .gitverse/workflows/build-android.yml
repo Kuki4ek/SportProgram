@@ -27,13 +27,16 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Устанавливаем Gradle (setup-gradle сам скачает нужную версию)
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'   # при необходимости поменяй на нужную версию
+      # Устанавливаем Gradle вручную (без gradle/actions/setup-gradle)
+      - name: Install Gradle
+        run: |
+          GRADLE_VERSION=8.9
+          wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip
+          unzip -q gradle-${GRADLE_VERSION}-bin.zip -d /opt
+          echo "/opt/gradle-${GRADLE_VERSION}/bin" >> $GITHUB_PATH
+          /opt/gradle-${GRADLE_VERSION}/bin/gradle --version
 
-      # Если используешь gradle-wrapper.jar — regenerated wrapper под нужную версию
+      # Если в репо нет gradle-wrapper.jar — пересоздаём wrapper
       - name: Regenerate Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
 
