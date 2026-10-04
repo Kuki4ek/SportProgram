@@ -21,22 +21,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Устанавливаем JDK 17, так как это требование AGP 9.4
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # 1. Указываем Gradle, где искать Android SDK
+      # Устанавливаем Gradle (setup-gradle сам скачает нужную версию)
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'   # при необходимости поменяй на нужную версию
+
+      # Если используешь gradle-wrapper.jar — regenerated wrapper под нужную версию
+      - name: Regenerate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.9
+
       - name: Set up Android SDK
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      # 2. Даем права на выполнение для gradlew
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # 3. Собираем проект
       - name: Build with Gradle
         run: ./gradlew assembleDebug
