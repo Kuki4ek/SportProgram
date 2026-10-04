@@ -24,7 +24,7 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '25'
           distribution: 'temurin'
 
       # Устанавливаем Gradle вручную (без gradle/actions/setup-gradle)
