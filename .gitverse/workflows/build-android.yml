@@ -1,0 +1,37 @@
+name: Build Android
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'sport-app-android/**'
+      - '.gitverse/workflows/build-android.yml'
+  pull_request:
+    paths:
+      - 'sport-app-android/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sport-app-android
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Устанавливаем JDK 17, так как это требование AGP 9.4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Даем права на выполнение для gradlew
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # Собираем проект. Используем assembleDebug для проверки сборки
+      - name: Build with Gradle
+        run: ./gradlew assembleDebug
