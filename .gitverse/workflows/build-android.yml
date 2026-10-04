@@ -28,10 +28,15 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Даем права на выполнение для gradlew
+      # 1. Указываем Gradle, где искать Android SDK
+      - name: Set up Android SDK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      # 2. Даем права на выполнение для gradlew
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # Собираем проект. Используем assembleDebug для проверки сборки
+      # 3. Собираем проект
       - name: Build with Gradle
         run: ./gradlew assembleDebug
