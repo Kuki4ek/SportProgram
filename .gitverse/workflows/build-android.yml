@@ -30,8 +30,17 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Configure Android SDK
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -d "$ANDROID_HOME/platform-tools"
+          ls "$ANDROID_HOME"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
