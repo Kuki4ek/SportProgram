@@ -1,0 +1,9 @@
+services:
+sportprogram-api:
+build:
+context: .
+dockerfile: sport-app-server/Dockerfile
+container_name: sportprogram-api
+restart: unless-stopped
+ports:
+- "127.0.0.1:18080:8080"
