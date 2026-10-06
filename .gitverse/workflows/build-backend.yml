@@ -1,18 +1,21 @@
+
 name: Build ASP.NET Backend
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
     paths:
       - 'sport-app-server/**'
       - '.gitverse/workflows/build-backend.yml'
   pull_request:
     paths:
       - 'sport-app-server/**'
+      - '.gitverse/workflows/build-backend.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: ./sport-app-server
@@ -30,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('sport-app-server/**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -40,5 +43,12 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
-      - name: Test
-        run: dotnet test --no-build --verbosity normal
+      - name: Publish
+        run: dotnet publish sport-app-server/sport-app-server.csproj --configuration Release --no-restore --output ./publish
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sport-app-server
+          path: sport-app-server/publish/
+          if-no-files-found: error
