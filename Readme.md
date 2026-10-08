@@ -2,8 +2,12 @@
 
 SportProgram/
 
-├── 🗂️ sport-app-android/   <--- Папка проекта Android Studio
+├── 🗂️ .gitverse/    		<--- Папка с настройками CI
 
-├── 🗂️ sport-app-server/    <--- Папка проекта Visual Studio 2026
+├── 🗂️ docs/    			<--- Папка документации
+
+├── 🗂️ sport-app-android/  	<--- Папка проекта Android Studio
+
+├── 🗂️ sport-app-server/   	<--- Папка проекта Visual Studio 2026
 
 └── 📄 Readme.md
