@@ -6,13 +6,13 @@ plugins {
 android {
     namespace = "com.example.sport_app_android"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     defaultConfig {
         applicationId = "com.example.sport_app_android"
         minSdk = 29
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
