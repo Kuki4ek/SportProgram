@@ -68,6 +68,11 @@ jobs:
           fi
           echo "Using sdkmanager: $SDKMANAGER"
 
+          echo "Available Android platform packages:"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --list \
+            | grep -E 'platforms;android-[0-9]+' \
+            | head -n 50 || true
+
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
