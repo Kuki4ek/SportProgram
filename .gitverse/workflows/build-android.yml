@@ -34,14 +34,38 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          test -n "$ANDROID_HOME" || { echo "ANDROID_HOME is not set on the GitVerse runner"; exit 1; }
+          if [ -z "$ANDROID_HOME" ]; then
+            for candidate in \
+              "$HOME/Android/Sdk" \
+              "$HOME/android-sdk" \
+              "/opt/android-sdk" \
+              "/usr/local/lib/android/sdk" \
+              "/usr/lib/android-sdk"; do
+              if [ -d "$candidate" ]; then
+                ANDROID_HOME="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "$ANDROID_HOME" ]; then
+            ANDROID_HOME="$RUNNER_TEMP/android-sdk"
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            cd "$RUNNER_TEMP"
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O commandline-tools.zip
+            unzip -q commandline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+            mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          fi
+          test -d "$ANDROID_HOME" || { echo "Android SDK was not found or installed"; exit 1; }
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -perm -u+x 2>/dev/null | sort -V | tail -n 1)"
-          test -n "$SDKMANAGER" || { echo "sdkmanager was not found under $ANDROID_HOME"; exit 1; }
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found under $ANDROID_HOME"
+            exit 1
+          fi
           echo "Using sdkmanager: $SDKMANAGER"
 
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
