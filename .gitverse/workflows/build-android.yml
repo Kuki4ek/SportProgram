@@ -1,6 +1,7 @@
 name: Build Android
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
     paths:
@@ -48,7 +49,7 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
-            "platforms;android-37" \
+            "platforms;android-36" \
             "build-tools;36.0.0"
 
       - name: Configure Android SDK
@@ -57,12 +58,26 @@ jobs:
       - name: Verify Android SDK
         run: |
           test -d "$ANDROID_HOME/platform-tools"
-          test -d "$ANDROID_HOME/platforms/android-37"
+          test -d "$ANDROID_HOME/platforms/android-36"
           test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           echo "Android SDK is ready at $ANDROID_HOME"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew --no-daemon assembleDebug
+      - name: Build Debug and Release APKs
+        run: ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sport-app-debug-apk
+          path: sport-app-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sport-app-release-apk
+          path: sport-app-android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
