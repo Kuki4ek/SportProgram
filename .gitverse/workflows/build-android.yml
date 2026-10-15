@@ -76,7 +76,7 @@ jobs:
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
-            "platforms;android-37" \
+            "platforms;android-37.2" \
             "build-tools;36.0.0"
 
       - name: Configure Android SDK
@@ -85,7 +85,7 @@ jobs:
       - name: Verify Android SDK
         run: |
           test -d "$ANDROID_HOME/platform-tools"
-          test -d "$ANDROID_HOME/platforms/android-37"
+          test -d "$ANDROID_HOME/platforms/android-37.2"
           test -d "$ANDROID_HOME/build-tools/36.0.0"
           echo "Android SDK is ready at $ANDROID_HOME"
 
