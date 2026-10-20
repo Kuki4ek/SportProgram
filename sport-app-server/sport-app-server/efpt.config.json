@@ -1,0 +1,94 @@
+﻿{
+   "CodeGenerationMode": 6,
+   "ContextClassName": "sport-appContext",
+   "ContextNamespace": null,
+   "FilterSchemas": false,
+   "IncludeConnectionString": false,
+   "IrregularWords": null,
+   "MinimumProductVersion": "2.6.1777",
+   "ModelNamespace": null,
+   "OutputContextPath": null,
+   "OutputPath": "Models",
+   "PluralRules": null,
+   "PreserveCasingWithRegex": true,
+   "ProjectRootNamespace": "sport_app_server",
+   "Schemas": null,
+   "SelectedHandlebarsLanguage": 2,
+   "SelectedToBeGenerated": 0,
+   "SingularRules": null,
+   "T4TemplatePath": null,
+   "Tables": [
+      {
+         "Name": "public.exercise_in_task",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.exercise_journal",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.exercises",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.items",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.partners",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.rewards",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.tasks",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.transactions",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.user_items",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.user_tasks",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.users",
+         "ObjectType": 0
+      }
+   ],
+   "UiHint": null,
+   "UncountableWords": null,
+   "UseAsyncStoredProcedureCalls": true,
+   "UseBoolPropertiesWithoutDefaultSql": false,
+   "UseDatabaseNames": false,
+   "UseDatabaseNamesForRoutines": true,
+   "UseDateOnlyTimeOnly": true,
+   "UseDbContextSplitting": false,
+   "UseDecimalDataAnnotationForSprocResult": true,
+   "UseFluentApiOnly": true,
+   "UseHandleBars": false,
+   "UseHierarchyId": false,
+   "UseInflector": true,
+   "UseInternalAccessModifiersForSprocsAndFunctions": false,
+   "UseLegacyPluralizer": false,
+   "UseManyToManyEntity": false,
+   "UseNoDefaultConstructor": false,
+   "UseNoNavigations": false,
+   "UseNoObjectFilter": false,
+   "UseNodaTime": false,
+   "UseNullableReferences": false,
+   "UsePrefixNavigationNaming": false,
+   "UseSchemaFolders": false,
+   "UseSchemaNamespaces": false,
+   "UseSpatial": false,
+   "UseT4": false,
+   "UseT4Split": false,
+   "UseTypedTvpParameters": true
+}
