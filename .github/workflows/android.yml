@@ -116,6 +116,6 @@ jobs:
           # Minor version number
           minor: 1
           # GitHub token
-          github-token: 
+          github-token: secrets.GITHUB_TOKEN
 
         
