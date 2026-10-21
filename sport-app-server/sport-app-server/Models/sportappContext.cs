@@ -210,8 +210,6 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("users");
 
-            entity.HasIndex(e => e.PhoneNumber, "users_phone_number_key").IsUnique();
-
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
@@ -232,7 +230,6 @@ public partial class sportappContext : DbContext
                 .HasMaxLength(255)
                 .HasColumnName("password_hash");
             entity.Property(e => e.PhoneNumber)
-                .IsRequired()
                 .HasMaxLength(25)
                 .HasColumnName("phone_number");
         });
