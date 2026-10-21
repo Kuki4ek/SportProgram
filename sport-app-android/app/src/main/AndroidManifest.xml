@@ -3,11 +3,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:allowBackup="true"
-        android:label="Спортакус"
+        android:usesCleartextTraffic="true"
+        android:label="Спортакус — тёмная тема"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SportakusAuth">
         <activity
-            android:name=".MainActivity"
+            android:name="com.sportakus.auth.MainActivity"
             android:exported="true"
             android:screenOrientation="portrait">
             <intent-filter>

@@ -2,9 +2,6 @@ package com.sportakus.auth.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import com.sportakus.auth.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,15 +22,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Visibility
@@ -46,7 +42,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -56,15 +51,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sportakus.auth.R
+
+
+// Always read foreground colors from the active MaterialTheme rather than a
+// separately passed Boolean. This keeps every text element synchronized with the
+// actual color scheme when the user switches themes.
+@Composable
+private fun authForeground(): Color = Color(0xFFF2F5EE)
+
+@Composable
+private fun authSecondaryForeground(): Color = Color(0xFFF2F5EE)
+
+@Composable
+private fun authButtonForeground(): Color = Color(0xFFF2F5EE)
 
 @Composable
 fun LoginScreen(
@@ -78,7 +90,8 @@ fun LoginScreen(
     onForgotPassword: () -> Unit,
     onRegister: () -> Unit,
     onLogin: () -> Unit,
-    onSocialAuth: (String) -> Unit
+    onSocialAuth: (String) -> Unit,
+    isSubmitting: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -94,40 +107,41 @@ fun LoginScreen(
             onToggleTheme = onToggleTheme
         )
 
+        // Keep the title on the screen background: it should not sit on a field-like panel.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp))
-                .background(MaterialTheme.colorScheme.surface)
                 .padding(top = 18.dp, bottom = 14.dp)
         ) {
-            Text(
+            DarkText(
                 text = "Войти",
                 fontSize = 28.sp,
                 lineHeight = 34.sp,
                 fontWeight = FontWeight.Bold,
-                color = authTitleColor(darkTheme)
+                color = authForeground()
             )
             Spacer(Modifier.height(8.dp))
-            Text(
+            DarkText(
                 text = "Пройти авторизацию в Спортакус",
                 fontSize = 16.sp,
                 lineHeight = 22.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = authSecondaryForeground()
             )
         }
 
         Spacer(Modifier.height(18.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = identifier,
             onValueChange = onIdentifierChange,
-            placeholder = "Телефон, почта или логин",
-            leadingIcon = Icons.Outlined.Email,
-            keyboardType = KeyboardType.Email,
+            placeholder = "Логин, почта или телефон",
+            leadingIcon = Icons.Outlined.PersonOutline,
+            keyboardType = KeyboardType.Text,
             imeAction = ImeAction.Next
         )
         Spacer(Modifier.height(12.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = password,
             onValueChange = onPasswordChange,
             placeholder = "Пароль",
@@ -144,9 +158,9 @@ fun LoginScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End
         ) {
-            Text(
+            DarkText(
                 text = "Забыли пароль?",
-                color = MaterialTheme.colorScheme.primary,
+                color = Color(0xFFF2F5EE),
                 fontWeight = FontWeight.Medium,
                 fontSize = 15.sp,
                 modifier = Modifier
@@ -155,9 +169,14 @@ fun LoginScreen(
                     .padding(vertical = 8.dp, horizontal = 2.dp)
             )
         }
-        PrimaryAuthButton(text = "Войти", onClick = onLogin)
+        PrimaryAuthButton(
+            text = if (isSubmitting) "Входим..." else "Войти",
+            darkTheme = darkTheme,
+            onClick = onLogin,
+            enabled = !isSubmitting
+        )
         Spacer(Modifier.height(24.dp))
-        OrDivider("Или войти через")
+        OrDivider("Или войти через", darkTheme = darkTheme)
         Spacer(Modifier.height(16.dp))
         SocialAuthButtons(
             registration = false,
@@ -168,6 +187,7 @@ fun LoginScreen(
         AuthFooter(
             firstPart = "Нет аккаунта?",
             action = "Регистрация",
+            darkTheme = darkTheme,
             onClick = onRegister
         )
         Spacer(Modifier.height(12.dp))
@@ -176,19 +196,26 @@ fun LoginScreen(
 
 @Composable
 fun RegistrationScreen(
-    name: String,
-    onNameChange: (String) -> Unit,
+    username: String,
+    onUsernameChange: (String) -> Unit,
     email: String,
     onEmailChange: (String) -> Unit,
+    phone: String,
+    onPhoneChange: (String) -> Unit,
     password: String,
     onPasswordChange: (String) -> Unit,
+    usernameError: String?,
+    emailError: String?,
+    phoneError: String?,
+    passwordError: String?,
     darkTheme: Boolean,
     onToggleTheme: () -> Unit,
     onBack: () -> Unit,
     onLogin: () -> Unit,
     onForgotPassword: () -> Unit,
     onRegister: () -> Unit,
-    onSocialAuth: (String) -> Unit
+    onSocialAuth: (String) -> Unit,
+    isSubmitting: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -205,29 +232,46 @@ fun RegistrationScreen(
         )
         Spacer(Modifier.height(20.dp))
         AuthTextField(
-            value = name,
-            onValueChange = onNameChange,
+            darkTheme = darkTheme,
+            value = username,
+            onValueChange = onUsernameChange,
             placeholder = "Твоё имя",
             leadingIcon = Icons.Outlined.PersonOutline,
+            validationError = usernameError,
             imeAction = ImeAction.Next
         )
         Spacer(Modifier.height(12.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = email,
             onValueChange = onEmailChange,
             placeholder = "Почта",
             leadingIcon = Icons.Outlined.Email,
             keyboardType = KeyboardType.Email,
+            validationError = emailError,
             imeAction = ImeAction.Next
         )
         Spacer(Modifier.height(12.dp))
         AuthTextField(
+            darkTheme = darkTheme,
+            value = phone,
+            onValueChange = onPhoneChange,
+            placeholder = "Телефон (необязательно)",
+            leadingIcon = Icons.Outlined.PhoneAndroid,
+            keyboardType = KeyboardType.Phone,
+            validationError = phoneError,
+            imeAction = ImeAction.Next
+        )
+        Spacer(Modifier.height(12.dp))
+        AuthTextField(
+            darkTheme = darkTheme,
             value = password,
             onValueChange = onPasswordChange,
             placeholder = "Пароль",
             leadingIcon = Icons.Outlined.Lock,
             isPassword = true,
             validatePasswordLength = true,
+            validationError = passwordError,
             imeAction = ImeAction.Done,
             onImeDone = onRegister
         )
@@ -236,9 +280,9 @@ fun RegistrationScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            Text(
+            DarkText(
                 text = "Забыли пароль?",
-                color = MaterialTheme.colorScheme.primary,
+                color = Color(0xFFF2F5EE),
                 fontWeight = FontWeight.Medium,
                 fontSize = 15.sp,
                 modifier = Modifier
@@ -248,9 +292,14 @@ fun RegistrationScreen(
             )
         }
         Spacer(Modifier.height(14.dp))
-        PrimaryAuthButton(text = "Регистрация", onClick = onRegister)
+        PrimaryAuthButton(
+            text = if (isSubmitting) "Отправка..." else "Регистрация",
+            darkTheme = darkTheme,
+            onClick = onRegister,
+            enabled = !isSubmitting
+        )
         Spacer(Modifier.height(28.dp))
-        OrDivider("Или зарегистрироваться через")
+        OrDivider("Или зарегистрироваться через", darkTheme = darkTheme)
         Spacer(Modifier.height(16.dp))
         SocialAuthButtons(
             registration = true,
@@ -261,6 +310,7 @@ fun RegistrationScreen(
         AuthFooter(
             firstPart = "Уже есть аккаунт?",
             action = "Войти",
+            darkTheme = darkTheme,
             onClick = onLogin
         )
         Spacer(Modifier.height(12.dp))
@@ -287,32 +337,31 @@ fun RecoveryScreen(
     ) {
         AuthTopBar(null, darkTheme, onBack, onToggleTheme)
         Spacer(Modifier.height(28.dp))
-        Text(
-            text = "Подтверждение",
+        DarkText(
+            text = "Восстановление пароля",
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
             fontSize = 27.sp,
             lineHeight = 34.sp,
             fontWeight = FontWeight.Bold,
-            color = authTitleColor(darkTheme)
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(10.dp))
-        Text(
+        DarkText(
             text = if (method == "Почта") {
-                "Мы отправим на данную почту код\nподтверждения."
+                "Укажи почту, связанную с аккаунтом.\nНа неё будет отправлен код для сброса пароля."
             } else {
-                "Мы отправим на данный номер код\nподтверждения."
+                "Укажи номер телефона, связанный с аккаунтом.\nНа него будет отправлен код для сброса пароля."
             },
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
             fontSize = 16.sp,
             lineHeight = 23.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(32.dp))
-        MethodSelector(selected = method, onSelect = onMethodChange)
+        MethodSelector(selected = method, darkTheme = darkTheme, onSelect = onMethodChange)
         Spacer(Modifier.height(32.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = contact,
             onValueChange = onContactChange,
             placeholder = if (method == "Почта") "Почта" else "Номер телефона",
@@ -322,12 +371,15 @@ fun RecoveryScreen(
             onImeDone = onSendCode
         )
         Spacer(Modifier.height(68.dp))
-        PrimaryAuthButton(text = "Отправить код", onClick = onSendCode)
+        PrimaryAuthButton(text = "Восстановить пароль", darkTheme = darkTheme, onClick = onSendCode)
     }
 }
 
 @Composable
 fun VerificationScreen(
+    title: String,
+    description: String,
+    buttonText: String,
     code: String,
     onCodeChange: (String) -> Unit,
     darkTheme: Boolean,
@@ -342,27 +394,27 @@ fun VerificationScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
     ) {
-        AuthTopBar("Подтверждение", darkTheme, onBack, onToggleTheme)
+        AuthTopBar(null, darkTheme, onBack, onToggleTheme)
         Spacer(Modifier.height(34.dp))
-        Text(
-            text = "Введите код",
+        DarkText(
+            text = title,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
             fontSize = 27.sp,
+            lineHeight = 34.sp,
             fontWeight = FontWeight.Bold,
-            color = authTitleColor(darkTheme)
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(10.dp))
-        Text(
-            text = "Введите код подтверждения,\nкоторый мы отправили вам.",
+        DarkText(
+            text = description,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
             fontSize = 16.sp,
             lineHeight = 23.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(38.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = code,
             onValueChange = onCodeChange,
             placeholder = "Код подтверждения",
@@ -372,7 +424,7 @@ fun VerificationScreen(
             onImeDone = onVerify
         )
         Spacer(Modifier.height(28.dp))
-        PrimaryAuthButton(text = "Подтвердить код", onClick = onVerify)
+        PrimaryAuthButton(text = buttonText, darkTheme = darkTheme, onClick = onVerify)
     }
 }
 
@@ -396,21 +448,20 @@ fun ResetPasswordScreen(
     ) {
         AuthTopBar("Новый пароль", darkTheme, onBack, onToggleTheme)
         Spacer(Modifier.height(28.dp))
-        Text(
+        DarkText(
             text = "Придумайте пароль",
             fontSize = 27.sp,
             lineHeight = 34.sp,
             fontWeight = FontWeight.Bold,
-            color = authTitleColor(darkTheme)
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(8.dp))
-        Text(
+        DarkText(
             text = "Используйте не менее 8 символов.",
             fontSize = 16.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+            color = Color(0xFFF2F5EE))
         Spacer(Modifier.height(24.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = password,
             onValueChange = onPasswordChange,
             placeholder = "Новый пароль",
@@ -421,6 +472,7 @@ fun ResetPasswordScreen(
         )
         Spacer(Modifier.height(12.dp))
         AuthTextField(
+            darkTheme = darkTheme,
             value = confirmPassword,
             onValueChange = onConfirmPasswordChange,
             placeholder = "Повторите пароль",
@@ -430,13 +482,14 @@ fun ResetPasswordScreen(
             onImeDone = onReset
         )
         Spacer(Modifier.height(28.dp))
-        PrimaryAuthButton(text = "Сохранить пароль", onClick = onReset)
+        PrimaryAuthButton(text = "Сохранить пароль", darkTheme = darkTheme, onClick = onReset)
     }
 }
 
-/** High-contrast screen heading: black in light theme, near-white in dark theme. */
-private fun authTitleColor(darkTheme: Boolean): Color =
-    if (darkTheme) Color(0xFFF2F5EE) else Color(0xFF000000)
+/**
+ * Use the current screen's explicit theme flag for foreground text.
+ * This application uses one light theme; all visible labels use DarkText.
+ */
 
 @Composable
 private fun AuthTopBar(
@@ -459,31 +512,17 @@ private fun AuthTopBar(
             Icon(
                 imageVector = Icons.Outlined.Close,
                 contentDescription = "Назад",
-                tint = MaterialTheme.colorScheme.onBackground,
+                tint = authForeground(),
                 modifier = Modifier.size(23.dp)
             )
         }
         if (!title.isNullOrBlank()) {
-            Text(
+            DarkText(
                 text = title,
                 modifier = Modifier.align(Alignment.Center),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = authTitleColor(darkTheme)
-            )
-        }
-        IconButton(
-            onClick = onToggleTheme,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(44.dp)
-        ) {
-            Icon(
-                imageVector = if (darkTheme) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                contentDescription = if (darkTheme) "Включить светлую тему" else "Включить тёмную тему",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(21.dp)
-            )
+                color = Color(0xFFF2F5EE))
         }
     }
 }
@@ -494,12 +533,14 @@ private fun AuthTextField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     leadingIcon: ImageVector,
+    darkTheme: Boolean,
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Next,
     isPassword: Boolean = false,
     onImeDone: (() -> Unit)? = null,
-    validatePasswordLength: Boolean = false
+    validatePasswordLength: Boolean = false,
+    validationError: String? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
@@ -511,6 +552,7 @@ private fun AuthTextField(
             onValueChange = onValueChange,
             placeholder = placeholder,
             leadingIcon = leadingIcon,
+            darkTheme = darkTheme,
             modifier = Modifier.fillMaxWidth(),
             keyboardType = keyboardType,
             imeAction = imeAction,
@@ -518,15 +560,22 @@ private fun AuthTextField(
             onImeDone = onImeDone,
             interactionSource = interactionSource,
             focused = focused,
-            passwordLengthInvalid = passwordLengthInvalid
+            passwordLengthInvalid = passwordLengthInvalid || validationError != null
         )
 
-        if (validatePasswordLength && value.isNotEmpty()) {
-            Text(
+        if (validationError != null) {
+            DarkText(
+                text = validationError,
+                modifier = Modifier.padding(start = 4.dp, top = 5.dp),
+                color = Color(0xFFF2F5EE),
+                fontSize = 12.sp,
+                lineHeight = 15.sp
+            )
+        } else if (validatePasswordLength && value.isNotEmpty()) {
+            DarkText(
                 text = if (passwordLengthInvalid) "Минимум 8 символов" else "Длина пароля подходит",
                 modifier = Modifier.padding(start = 4.dp, top = 5.dp),
-                color = if (passwordLengthInvalid) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color(0xFFF2F5EE),
                 fontSize = 12.sp,
                 lineHeight = 15.sp
             )
@@ -541,6 +590,7 @@ private fun varPasswordField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     leadingIcon: ImageVector,
+    darkTheme: Boolean,
     modifier: Modifier,
     keyboardType: KeyboardType,
     imeAction: ImeAction,
@@ -577,7 +627,7 @@ private fun varPasswordField(
         Icon(
             imageVector = leadingIcon,
             contentDescription = null,
-            tint = colors.onSurfaceVariant,
+            tint = authSecondaryForeground(),
             modifier = Modifier.size(21.dp)
         )
         Spacer(Modifier.width(12.dp))
@@ -586,9 +636,9 @@ private fun varPasswordField(
             contentAlignment = Alignment.CenterStart
         ) {
             if (value.isEmpty()) {
-                Text(
+                DarkText(
                     text = placeholder,
-                    color = colors.onSurfaceVariant,
+                    color = Color(0xFFF2F5EE),
                     fontSize = 16.sp,
                     maxLines = 1
                 )
@@ -596,14 +646,17 @@ private fun varPasswordField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(26.dp),
                 singleLine = true,
                 interactionSource = interactionSource,
+                // Fixed dark text is intentional: this version has a light-only theme,
+                // and text must remain visible independently of inherited Compose styles.
                 textStyle = androidx.compose.ui.text.TextStyle(
-                    color = colors.onSurface,
-                    fontSize = 16.sp
+                    color = Color(0xFFF2F5EE),
+                    fontSize = 16.sp,
+                    textDecoration = TextDecoration.None
                 ),
-                cursorBrush = SolidColor(colors.primary),
+                cursorBrush = SolidColor(Color(0xFFF2F5EE)),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = if (isPassword && keyboardType == KeyboardType.Text) KeyboardType.Password else keyboardType,
                     imeAction = imeAction
@@ -626,7 +679,7 @@ private fun varPasswordField(
                 Icon(
                     imageVector = if (passwordVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
                     contentDescription = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
-                    tint = colors.onSurfaceVariant,
+                    tint = authSecondaryForeground(),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -635,25 +688,32 @@ private fun varPasswordField(
 }
 
 @Composable
-private fun PrimaryAuthButton(text: String, onClick: () -> Unit) {
+private fun PrimaryAuthButton(
+    text: String,
+    darkTheme: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp),
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary
+            contentColor = Color(0xFFF2F5EE),
+            disabledContentColor = Color(0xFFF2F5EE)
         ),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
     ) {
-        Text(text = text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        DarkText(text = text, color = Color(0xFFF2F5EE), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
-private fun OrDivider(text: String) {
+private fun OrDivider(text: String, darkTheme: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -665,11 +725,11 @@ private fun OrDivider(text: String) {
                 .height(1.dp)
                 .background(MaterialTheme.colorScheme.outline)
         )
-        Text(
+        DarkText(
             text = text,
             modifier = Modifier.padding(horizontal = 13.dp),
             fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color(0xFFF2F5EE),
             maxLines = 1
         )
         Box(
@@ -687,29 +747,45 @@ private fun SocialAuthButtons(
     darkTheme: Boolean,
     onProviderClick: (String) -> Unit
 ) {
-    val labelColor = if (darkTheme) Color(0xFFF2F5EE) else Color(0xFF000000)
-    val firstText = if (registration) "Регистрация через Госуслуги" else "Войти через Госуслуги"
-    val secondText = if (registration) "Регистрация через ВКонтакте" else "Войти через ВКонтакте"
-
-    SocialAuthButton(
-        text = firstText,
-        logoRes = R.drawable.gosuslugi_logo,
-        labelColor = labelColor,
-        onClick = { onProviderClick("Госуслуги") }
-    )
-    Spacer(Modifier.height(12.dp))
-    SocialAuthButton(
-        text = secondText,
-        logoRes = R.drawable.vk_logo,
-        labelColor = labelColor,
-        onClick = { onProviderClick("ВКонтакте") }
-    )
+    val labelColor = Color(0xFFF2F5EE)
+    Column {
+        SocialAuthButton(
+            text = if (registration) "Регистрация через Google" else "Войти через Google",
+            logoRes = R.drawable.google_logo,
+            glyph = null,
+            glyphColor = Color(0xFF4285F4),
+            labelColor = labelColor,
+            onClick = { onProviderClick("Google") }
+        )
+        Spacer(Modifier.height(10.dp))
+        SocialAuthButton(
+            text = if (registration) "Регистрация через Яндекс" else "Войти через Яндекс",
+            logoRes = R.drawable.yandex_logo,
+            glyph = null,
+            glyphColor = Color(0xFFFF3333),
+            labelColor = labelColor,
+            onClick = { onProviderClick("Яндекс") }
+        )
+        if (!registration) {
+            Spacer(Modifier.height(10.dp))
+            SocialAuthButton(
+                text = "Войти через почту",
+                logoRes = null,
+                glyph = "✉",
+                glyphColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                labelColor = labelColor,
+                onClick = { onProviderClick("почту") }
+            )
+        }
+    }
 }
 
 @Composable
 private fun SocialAuthButton(
     text: String,
-    logoRes: Int,
+    logoRes: Int?,
+    glyph: String?,
+    glyphColor: Color,
     labelColor: Color,
     onClick: () -> Unit
 ) {
@@ -717,27 +793,50 @@ private fun SocialAuthButton(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
-        shape = RoundedCornerShape(16.dp),
+            .height(52.dp),
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
+            contentColor = Color(0xFFF2F5EE),
+            disabledContentColor = Color(0xFFF2F5EE)
         ),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
     ) {
-        Image(
-            painter = painterResource(id = logoRes),
-            contentDescription = text,
-            modifier = Modifier.size(34.dp),
-            contentScale = ContentScale.Fit
-        )
+        Surface(
+            modifier = Modifier.size(30.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = CircleShape
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                when {
+                    logoRes != null -> Image(
+                        painter = painterResource(id = logoRes),
+                        contentDescription = text,
+                        modifier = Modifier.size(22.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    glyph == "✉" -> Icon(
+                        Icons.Outlined.Email,
+                        contentDescription = null,
+                        tint = glyphColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    else -> DarkText(
+                        glyph.orEmpty(),
+                        color = Color(0xFFF2F5EE),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
         Spacer(Modifier.width(12.dp))
-        Text(
+        DarkText(
             text = text,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
-            color = labelColor,
+            color = Color(0xFFF2F5EE),
             maxLines = 1
         )
     }
@@ -747,6 +846,7 @@ private fun SocialAuthButton(
 private fun AuthFooter(
     firstPart: String,
     action: String,
+    darkTheme: Boolean,
     onClick: () -> Unit
 ) {
     Row(
@@ -754,15 +854,15 @@ private fun AuthFooter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        Text(
+        DarkText(
             text = firstPart,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color(0xFFF2F5EE),
             fontSize = 14.sp
         )
         Spacer(Modifier.width(4.dp))
-        Text(
+        DarkText(
             text = action,
-            color = MaterialTheme.colorScheme.primary,
+            color = Color(0xFFF2F5EE),
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
             modifier = Modifier
@@ -774,7 +874,7 @@ private fun AuthFooter(
 }
 
 @Composable
-private fun MethodSelector(selected: String, onSelect: (String) -> Unit) {
+private fun MethodSelector(selected: String, darkTheme: Boolean, onSelect: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -795,13 +895,89 @@ private fun MethodSelector(selected: String, onSelect: (String) -> Unit) {
                     .clickable { onSelect(option) },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
+                DarkText(
                     text = option,
                     fontSize = 13.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    // Keep the selector label color fixed regardless of selection state.
+                    color = Color(0xFFF2F5EE)
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun ServerSettingsScreen(
+    baseUrl: String,
+    onBaseUrlChange: (String) -> Unit,
+    onBack: () -> Unit,
+    onSave: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusAndNavigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 8.dp)
+    ) {
+        AuthTopBar(
+            title = "Адрес тестового сервера",
+            darkTheme = true,
+            onBack = onBack,
+            onToggleTheme = {}
+        )
+        Spacer(Modifier.height(26.dp))
+        DarkText(
+            text = "Базовый адрес API",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFF2F5EE)
+        )
+        Spacer(Modifier.height(10.dp))
+        DarkText(
+            text = "Укажи базовый адрес сервера без пути endpoint. Адрес сохраняется на устройстве и используется для входа, регистрации и проверки профиля.",
+            fontSize = 15.sp,
+            lineHeight = 22.sp,
+            color = Color(0xFFF2F5EE)
+        )
+        Spacer(Modifier.height(22.dp))
+        AuthTextField(
+            value = baseUrl,
+            onValueChange = onBaseUrlChange,
+            placeholder = "http://10.0.2.2:5000",
+            leadingIcon = Icons.Outlined.VpnKey,
+            darkTheme = true,
+            keyboardType = KeyboardType.Uri,
+            imeAction = ImeAction.Done
+        )
+        Spacer(Modifier.height(16.dp))
+        DarkText(
+            text = "Эмулятор Android: обычно http://10.0.2.2:5000. Если ASP.NET Core использует другой порт, впиши порт из launchSettings.json.",
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            color = Color(0xFFB8C5AE)
+        )
+        Spacer(Modifier.height(10.dp))
+        DarkText(
+            text = "Реальный телефон: укажи адрес, доступный с телефона. Это может быть IP компьютера в одной Wi-Fi сети или публичный HTTPS-адрес/туннель, если вы в разных сетях.",
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            color = Color(0xFFB8C5AE)
+        )
+        Spacer(Modifier.height(28.dp))
+        PrimaryAuthButton(text = "Сохранить адрес", darkTheme = true, onClick = onSave)
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = Color(0xFFF2F5EE)
+            )
+        ) {
+            DarkText("Отмена", color = Color(0xFFF2F5EE), fontWeight = FontWeight.SemiBold)
         }
     }
 }
