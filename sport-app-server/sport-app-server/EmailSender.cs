@@ -7,13 +7,13 @@ namespace sport_app_server
     public record EmailData(string Subject, string BodyText);
     public static class EmailSender
     {
-        public static async Task<bool> SendEmail(User user, EmailData emailData, string emailKey)
+        public static async Task<bool> SendEmail(string Nickname, string Email, EmailData emailData, string emailKey)
         {
             try
             {
                 var message = new MimeMessage();
                 message.From.Add(new MailboxAddress("Sport App", "notifi.sportakus@gmail.com"));
-                message.To.Add(new MailboxAddress(user.Nickname, user.Email));
+                message.To.Add(new MailboxAddress(Nickname, Email));
                 message.Subject = emailData.Subject;
 
                 message.Body = new TextPart("html")
@@ -35,6 +35,10 @@ namespace sport_app_server
             {
                 return false;
             }
+        }
+        public static async Task<bool> SendEmail(User user, EmailData emailData, string emailKey)
+        {
+            return await SendEmail(user.Nickname, user.Email, emailData, emailKey);
         }
     }
     
