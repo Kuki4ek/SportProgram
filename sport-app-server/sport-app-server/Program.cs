@@ -37,8 +37,12 @@ namespace sport_app_server
             string secretKey    = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? throw new InvalidOperationException("Ключ не найден");
             string issuer       = Environment.GetEnvironmentVariable("JWT_ISSUER") ?? throw new InvalidOperationException("JWT_ISSUER не найден");
             string audience     = Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? throw new InvalidOperationException("JWT_AUDIENCE не найден");
-            int jwtExpirationMinutes = int.Parse(Environment.GetEnvironmentVariable("JWT_EXPIRATION_MINUTES") ?? throw new InvalidOperationException("JWT_EXPIRATION_MINUTES не найден")); // Может сломаться если не число
+            int jwtExpirationMinutes;
             string databaseConnectParams = Environment.GetEnvironmentVariable("DB_CONNECT_PARAMS") ?? throw new InvalidOperationException("Данные для подключения к базе не найдены");
+            bool parseResult = int.TryParse(Environment.GetEnvironmentVariable("JWT_EXPIRATION_MINUTES") ?? throw new InvalidOperationException("JWT_EXPIRATION_MINUTES не найден"), out jwtExpirationMinutes);
+            if (!parseResult)
+                throw new InvalidOperationException($"JWT_EXPIRATION_MINUTES имеет некорректное значение. Ожидается целое число.");
+
 
             builder.Services.AddDbContext<sportappContext>(options =>
                 options.UseNpgsql(databaseConnectParams));
