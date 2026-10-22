@@ -78,14 +78,6 @@ namespace sport_app_server
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.MapGet("/api/send-email", async (ClaimsPrincipal user, sportappContext db) =>
-            {
-                var userName = user.FindFirst(ClaimTypes.Name)?.Value;
-                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Nickname == userName);
-                EmailData emailData = new EmailData("Восстановление пароля", EmailGenerator.GenerateCodeHTML(currentUser.Nickname, "123456"));
-                bool resultSendEmail = await EmailSender.SendEmail(currentUser, emailData, emailKey);
-                return resultSendEmail ? Results.Ok() : Results.InternalServerError();
-            }).RequireAuthorization();
             app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, sportappContext db, IMemoryCache cache) =>
             {
                 var errors = new Dictionary<string, string[]>();
