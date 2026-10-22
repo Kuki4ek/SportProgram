@@ -1,29 +1,13 @@
-﻿using BCrypt.Net;
-using MailKit.Net.Smtp;
-using MailKit.Security;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity.Data;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.Win32;
+﻿using MailKit.Security;
 using MimeKit;
-using Npgsql;
-using Org.BouncyCastle.Asn1.Ocsp;
 using sport_app_server.Models;
-using System.IdentityModel.Tokens.Jwt;
-using System.Net.Mail;
-using System.Security.Claims;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using DotNetEnv;
+
 namespace sport_app_server
 {
     public record EmailData(string Subject, string BodyText);
     public static class EmailSender
     {
-        //-----------------Тестовая часть для отправки email-----------------------------------------------------
-        public static async void SendEmail(User user, EmailData emailData, string emailKey)
+        public static async Task<bool> SendEmail(User user, EmailData emailData, string emailKey)
         {
             try
             {
@@ -45,12 +29,13 @@ namespace sport_app_server
 
                 await client.SendAsync(message);
                 await client.DisconnectAsync(true);
-                
+                return true;
             }
             catch (Exception ex)
             {
-                
+                return false;
             }
         }
     }
+    
 }
