@@ -1,4 +1,6 @@
-﻿namespace sport_app_server
+﻿using System.Security.Cryptography;
+
+namespace sport_app_server
 {
     public struct CheckResult
     {
@@ -111,6 +113,10 @@
                 }
             }
             return checkResult;
+        }
+        public static string GenerateCode(int digits = 6)
+        {
+            return RandomNumberGenerator.GetInt32(10^(digits - 1), 10^digits).ToString();
         }
     }
 }
