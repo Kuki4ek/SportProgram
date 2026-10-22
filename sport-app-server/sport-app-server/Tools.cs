@@ -116,7 +116,7 @@ namespace sport_app_server
         }
         public static string GenerateCode(int digits = 6)
         {
-            return RandomNumberGenerator.GetInt32(10^(digits - 1), 10^digits).ToString();
+            return RandomNumberGenerator.GetInt32((int)Math.Pow(10,(digits - 1)), (int)Math.Pow(10, digits)).ToString();
         }
     }
 }
