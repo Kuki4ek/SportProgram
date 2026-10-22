@@ -20,6 +20,11 @@
                 checkResult.error = true;
                 checkResult.errorMessage = "Имя пользователя обязательно";
             }
+            else if (login.Length > 50)
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя не должно быть длинее 50 символов";
+            }
             return checkResult;
         }
         public static CheckResult CheckPassword(string password)
@@ -44,7 +49,12 @@
             {
                 checkResult.error = true;
                 checkResult.errorMessage = "Почта обязательна";
-            }    
+            }
+            else if (email.Length > 100)
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Длина адреса почты должна быть меньше 100 символов";
+            }
             else if (!email.Contains("@") || !email.Contains(".") || (email.LastIndexOf("@") > email.LastIndexOf(".")) || !((email.LastIndexOf(".") - email.LastIndexOf("@")) >= 2) || !((email.Length - email.LastIndexOf(".")) >= 2) || (email.LastIndexOf('@') == 0))
             {
                 checkResult.error = true;
