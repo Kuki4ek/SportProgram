@@ -17,6 +17,7 @@ using System.Net.Mail;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using DotNetEnv;
 
 namespace sport_app_server
 {
@@ -28,14 +29,19 @@ namespace sport_app_server
         
         public static void Main(string[] args)
         {
-            string secretKey = "EvNFHhhBqz3kL5zwE60v7V6Knnwf6lP4"; // Ключ для JWT, да, я знаю что его так хранить в репозитории небезопасно, но пока не релиз версия --- катит
-            string issuer = "sport-app-server";
-            string audience = "sport-app-client";
+
 
             var builder = WebApplication.CreateBuilder(args);
 
+            Env.Load();
+            string secretKey    = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? throw new InvalidOperationException("Ключ не найден");
+            string issuer       = Environment.GetEnvironmentVariable("JWT_ISSUER") ?? throw new InvalidOperationException("JWT_ISSUER не найден");
+            string audience     = Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? throw new InvalidOperationException("JWT_AUDIENCE не найден");
+            int jwtExpirationMinutes = int.Parse(Environment.GetEnvironmentVariable("JWT_EXPIRATION_MINUTES") ?? throw new InvalidOperationException("JWT_EXPIRATION_MINUTES не найден")); // Может сломаться если не число
+            string databaseConnectParams = Environment.GetEnvironmentVariable("DB_CONNECT_PARAMS") ?? throw new InvalidOperationException("Данные для подключения к базе не найдены");
+
             builder.Services.AddDbContext<sportappContext>(options =>
-                options.UseNpgsql("Host=localhost;Database=sport-app;Username=postgres;Password=13495;SearchPath=public")); // Здесь точно так же как и с JWT
+                options.UseNpgsql(databaseConnectParams));
             builder.Services
                 .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 .AddJwtBearer(options =>
@@ -124,7 +130,7 @@ namespace sport_app_server
                 db.Users.Add(newUser);
                 await db.SaveChangesAsync();
 
-                string jwt = GenerateJwtToken(newUser, secretKey, issuer, audience);
+                string jwt = GenerateJwtToken(newUser, secretKey, issuer, audience, jwtExpirationMinutes);
                 LoginAnswner loginAnswner = new LoginAnswner(jwt);
                 return Results.Ok(loginAnswner);
             });
@@ -171,7 +177,7 @@ namespace sport_app_server
 
                 await db.SaveChangesAsync();
 
-                string jwt = GenerateJwtToken(currentUser, secretKey, issuer, audience);
+                string jwt = GenerateJwtToken(currentUser, secretKey, issuer, audience, jwtExpirationMinutes);
                 LoginAnswner loginAnswner = new LoginAnswner(jwt);
                 return Results.Ok(loginAnswner);
             });
@@ -189,6 +195,7 @@ namespace sport_app_server
                     daysStraight = currentUser.DaysStraight
                 });
             }).RequireAuthorization();
+
             //----------------------Заготовка сброса пароля-------------------------------------------------------------------------
             //app.MapGet("/api/auth/forgot-password/request", async ([FromBody] PasswordResetRequest request, sportappContext db) =>
             //{
@@ -243,7 +250,7 @@ namespace sport_app_server
             app.Run();
         }
         
-        private static string GenerateJwtToken(User user, string secretKey, string issuer, string audience)
+        private static string GenerateJwtToken(User user, string secretKey, string issuer, string audience, int jwtExpirationMinutes)
         {
             var claims = new List<Claim>
             {
@@ -259,7 +266,7 @@ namespace sport_app_server
                 issuer: issuer,
                 audience: audience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddMinutes(5),
+                expires: DateTime.UtcNow.AddMinutes(jwtExpirationMinutes),
                 signingCredentials: credentials
             );
 
