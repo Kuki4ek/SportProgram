@@ -1,11 +1,13 @@
 
 using BCrypt.Net;
+using DotNetEnv;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Win32;
 using MimeKit;
@@ -17,12 +19,13 @@ using System.Net.Mail;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using DotNetEnv;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace sport_app_server
 {
-    public record LoginRecord(string Login, string Email, string Password, string? Phone);
+    public record LoginRecord(string Login, string Email, string Password, string? Phone, string? EmailCode);
     public record LoginAnswner(string JWT);
+    public record EmailConfirmRequest(string Email);
     // public record PasswordResetRequest(string Email, string CodeToken, string Code, string ResetTocken);
     public class Program
     {
@@ -39,6 +42,7 @@ namespace sport_app_server
             string audience     = Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? throw new InvalidOperationException("JWT_AUDIENCE не найден");
             int jwtExpirationMinutes = int.Parse(Environment.GetEnvironmentVariable("JWT_EXPIRATION_MINUTES") ?? throw new InvalidOperationException("JWT_EXPIRATION_MINUTES не найден")); // Может сломаться если не число
             string databaseConnectParams = Environment.GetEnvironmentVariable("DB_CONNECT_PARAMS") ?? throw new InvalidOperationException("Данные для подключения к базе не найдены");
+            string emailKey = Environment.GetEnvironmentVariable("EMAIL_KEY") ?? throw new InvalidOperationException("Данные для подключения к базе не найдены");
 
             builder.Services.AddDbContext<sportappContext>(options =>
                 options.UseNpgsql(databaseConnectParams));
@@ -59,7 +63,7 @@ namespace sport_app_server
                 });
 
             builder.Services.AddAuthorization();
-
+            builder.Services.AddMemoryCache();
             builder.Services.AddOpenApi();
 
             var app = builder.Build();
@@ -74,7 +78,15 @@ namespace sport_app_server
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, sportappContext db) =>
+            app.MapGet("/api/send-email", async (ClaimsPrincipal user, sportappContext db) =>
+            {
+                var userName = user.FindFirst(ClaimTypes.Name)?.Value;
+                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Nickname == userName);
+                EmailData emailData = new EmailData("Восстановление пароля", EmailGenerator.GenerateCodeHTML(currentUser.Nickname, "123456"));
+                bool resultSendEmail = await EmailSender.SendEmail(currentUser, emailData, emailKey);
+                return resultSendEmail ? Results.Ok() : Results.InternalServerError();
+            }).RequireAuthorization();
+            app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, sportappContext db, IMemoryCache cache) =>
             {
                 var errors = new Dictionary<string, string[]>();
                 CheckResult loginCheck = Tools.CheckLogin(request.Login);
@@ -98,7 +110,20 @@ namespace sport_app_server
                 {
                     errors["phone"] = new[] { phoneCheck.errorMessage };
                 }
-                
+                if(string.IsNullOrEmpty(request.EmailCode))
+                {
+                    errors["email"] = new[] { "Для подтверждения почты необходим код" };
+                }
+                string cacheKey = $"email_confirm_{request.Email}";
+                string? codeHash = cache.Get<string>(cacheKey);
+                if (string.IsNullOrEmpty(codeHash))
+                {
+                    errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
+                }
+                if (!BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                {
+                    errors["email"] = new[] { "Код неверный" };
+                }
                 var users = await db.Users.ToListAsync();
                 int findLogin = (from user in users where user.Nickname == request.Login select user).Count();
                 if (findLogin != 0)
@@ -195,6 +220,38 @@ namespace sport_app_server
                     daysStraight = currentUser.DaysStraight
                 });
             }).RequireAuthorization();
+            app.MapPost("/api/auth/email-confirm", async ([FromBody] EmailConfirmRequest request, sportappContext db, IMemoryCache cache) =>
+            {
+                CheckResult emailCheck = Tools.CheckEmail(request.Email);
+                User? currentUser = null;
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error)
+                {
+                    errors["email"] = new[] { emailCheck.errorMessage };
+                }
+                else
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Email == request.Email);
+                }
+                if (currentUser != null)
+                    errors["email"] = new[] { "Почта уже подтверждена" };
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                string cacheKey = $"email_confirm_{request.Email}";
+                string code = Tools.GenerateCode();
+                string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
+                EmailData emailData = new EmailData("Подтверждение электронного адреса", EmailGenerator.GenerateCodeHTML("", code));
+                if (EmailSender.SendEmail("Пользователь", request.Email, emailData, emailKey).Result)
+                    cache.Set(cacheKey, codeHash, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+                    });
+                else
+                    return Results.InternalServerError();
+
+                return Results.Ok();
+            });
 
             //----------------------Заготовка сброса пароля-------------------------------------------------------------------------
             //app.MapGet("/api/auth/forgot-password/request", async ([FromBody] PasswordResetRequest request, sportappContext db) =>
@@ -213,39 +270,7 @@ namespace sport_app_server
 
             //});
 
-            //-----------------Тестовая часть для отправки email-----------------------------------------------------
-            //app.MapGet("/test-email", async (ClaimsPrincipal user, sportappContext db) =>
-            //{
-            //    try
-            //    {
-            //        var userName = user.FindFirst(ClaimTypes.Name)?.Value;
-            //        User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Nickname == userName);
-            //        var message = new MimeMessage();
-            //        message.From.Add(new MailboxAddress("Sport App", "notifi.sportakus@gmail.com"));
-            //        message.To.Add(new MailboxAddress(currentUser.Nickname, currentUser.Email));
-            //        message.Subject = "Тестовое письмо из Sport App";
-
-            //        message.Body = new TextPart("html")
-            //        {
-            //            Text = "<h1>Привет!</h1><p>Это тестовое письмо, отправленное из C# через Gmail SMTP.</p>"
-            //        };
-
-            //        using var client = new MailKit.Net.Smtp.SmtpClient();
-
-            //        await client.ConnectAsync("smtp.gmail.com", 587, SecureSocketOptions.StartTls);
-
-            //        await client.AuthenticateAsync("notifi.sportakus@gmail.com", "secret_key");
-
-            //        await client.SendAsync(message);
-            //        await client.DisconnectAsync(true);
-
-            //        return Results.Ok("Письмо успешно отправлено!");
-            //    }
-            //    catch (Exception ex)
-            //    {
-            //        return Results.Problem(detail: ex.ToString(), statusCode: 500);
-            //    }
-            //}).RequireAuthorization();
+            
             
             app.Run();
         }
