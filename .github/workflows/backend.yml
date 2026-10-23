@@ -97,8 +97,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: 55340
           script: |
-            cd sportprogram
-            git pull
+            cd /home/kuki4ek/SportProgram
+            git pull 
             docker compose up -d --build
 
 
