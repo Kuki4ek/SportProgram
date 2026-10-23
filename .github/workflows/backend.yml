@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7.0.1
-      
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -97,10 +97,6 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: 55340
           script: |
-            cd /home/kuki4ek/SportProgram
-            git pull 
+            cd /home/kuki4ek/SportProgram/sport-app-server
+            git pull
             docker compose up -d --build
-
-
-    
-            
