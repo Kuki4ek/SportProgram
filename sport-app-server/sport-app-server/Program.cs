@@ -25,7 +25,7 @@ namespace sport_app_server
 {
     public record LoginRecord(string Login, string Email, string Password, string? Phone, string? EmailCode);
     public record LoginAnswner(string JWT);
-    public record EmailConfirmRequest(string Email);
+    public record EmailConfirmRequest(string Login, string Email);
     // public record PasswordResetRequest(string Email, string CodeToken, string Code, string ResetTocken);
     public class Program
     {
@@ -215,11 +215,16 @@ namespace sport_app_server
             app.MapPost("/api/auth/email-confirm", async ([FromBody] EmailConfirmRequest request, sportappContext db, IMemoryCache cache) =>
             {
                 CheckResult emailCheck = Tools.CheckEmail(request.Email);
+                CheckResult loginCheck = Tools.CheckLogin(request.Login);
                 User? currentUser = null;
                 var errors = new Dictionary<string, string[]>();
                 if (emailCheck.error)
                 {
                     errors["email"] = new[] { emailCheck.errorMessage };
+                }
+                else if (loginCheck.error)
+                {
+                    errors["login"] = new[] { loginCheck.errorMessage };
                 }
                 else
                 {
@@ -227,14 +232,15 @@ namespace sport_app_server
                 }
                 if (currentUser != null)
                     errors["email"] = new[] { "Почта уже подтверждена" };
+
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
                 string cacheKey = $"email_confirm_{request.Email}";
                 string code = Tools.GenerateCode();
                 string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
-                EmailData emailData = new EmailData("Подтверждение электронного адреса", EmailGenerator.GenerateCodeHTML("", code));
-                if (EmailSender.SendEmail("Пользователь", request.Email, emailData, emailKey).Result)
+                EmailData emailData = new EmailData("Подтверждение электронного адреса", EmailGenerator.GenerateCodeHTML(request.Login, code));
+                if (EmailSender.SendEmail(request.Login, request.Email, emailData, emailKey).Result)
                     cache.Set(cacheKey, codeHash, new MemoryCacheEntryOptions
                     {
                         AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
