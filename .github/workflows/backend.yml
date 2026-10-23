@@ -1,0 +1,40 @@
+name: Backend-CI
+
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - 'sport-app-server/**'
+      - 'schema.sql'
+      - '.github/workflows/backend.yml'
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sport-app-server
+
+    steps:
+      - name: setup-dotnet
+        uses: xt0rted/setup-dotnet@v1.5.0
+        with:
+          dotnet-version: 10.x
+          global-json-file: # optional
+          source-url: # optional
+          owner: # optional
+          config-file: # optional
+          include-prerelease: # optional
+          colored-output: # optional, default is true
+          strip-comments-from-global-json: # optional, default is true
+          nuget_auth_token: # optional
+  
