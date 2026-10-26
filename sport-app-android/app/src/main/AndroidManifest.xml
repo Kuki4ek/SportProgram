@@ -4,7 +4,7 @@
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="true"
-        android:label="Спортакус — тёмная тема"
+        android:label="Спортакус"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"

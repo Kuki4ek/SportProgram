@@ -3,9 +3,9 @@ package com.sportakus.auth.ui.theme
 import androidx.compose.ui.graphics.Color
 
 val SportakusGreen = Color(0xFF507A12)
-val LightBackground = Color(0xFF101510) // Existing name retained for source compatibility.
-val LightSurface = Color(0xFF1B2219)
-val LightField = Color(0xFF252E22)
-val LightText = Color(0xFFF2F5EE)
-val LightSecondaryText = Color(0xFFF2F5EE)
-val LightOutline = Color(0xFF45523D)
+val LightBackground = Color(0xFFF8FAF5)
+val LightSurface = Color(0xFFFFFFFF)
+val LightField = Color(0xFFFFFFFF)
+val LightText = Color.Black
+val LightSecondaryText = Color(0xFF53594A)
+val LightOutline = Color(0xFFD3DACB)
