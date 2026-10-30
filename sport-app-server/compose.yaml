@@ -18,9 +18,11 @@ services:
 
   sportprogram-api:
     env_file: .env
-    build:
-      context: .
-      dockerfile: sport-app-server/Dockerfile   # → sport-app-server/sport-app-server/Dockerfile
+    # build:
+    #   context: .
+    #   dockerfile: sport-app-server/Dockerfile   # → sport-app-server/sport-app-server/Dockerfile
+    image: ghcr.io/<owner>/<repo>:${IMAGE_TAG:-latest}
+    pull_policy: ${PULL_POLICY:-missing}
     container_name: sportprogram-api
     restart: unless-stopped
     depends_on:
