@@ -8,6 +8,9 @@ on:
     - '.github/workflows/android.yml'
   pull_request:
     branches: [ "master" ]
+    paths:
+    - 'sport-app-android/**'
+    - '.github/workflows/android.yml'
 
 permissions:
   contents: write
@@ -109,7 +112,7 @@ jobs:
           path: sport-app-android/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
-      - name: Release APKs 
+      - name: Release APKs
         uses: softprops/action-gh-release@v2
         with:
           files: |
