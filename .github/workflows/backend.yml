@@ -125,7 +125,7 @@ jobs:
             cd /home/kuki4ek/SportProgram/sport-app-server
             git pull
             IMAGE_TAG=${{ github.sha }}
-            docker pull ghcr.io/<owner>/<repo>:$IMAGE_TAG
+            docker pull ghcr.io/kuki4ek/sportprogram:$IMAGE_TAG
             # фиксируем тег в .env, чтобы ручные перезапуски тоже поднимали ту же версию
             sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env || echo "IMAGE_TAG=$IMAGE_TAG" >> .env
             docker compose pull sportprogram-api
