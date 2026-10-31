@@ -123,6 +123,10 @@ jobs:
           port: 55340
           script: |
             set -e
+            whoami
+            echo "HOME=$HOME"
+            git remote -v
+            git config --global --list | grep -i credential; echo helper-set?
             cd /home/kuki4ek/SportProgram/sport-app-server
             git pull
             IMAGE_TAG=${{ github.sha }}
