@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: android-${{ github.ref }}
+  group: backend-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
