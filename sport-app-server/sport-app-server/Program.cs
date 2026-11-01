@@ -112,7 +112,7 @@ namespace sport_app_server
                 {
                     errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
                 }
-                if (!BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                else if (!string.IsNullOrEmpty(request.EmailCode) && !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
                 {
                     errors["email"] = new[] { "Код неверный" };
                 }
