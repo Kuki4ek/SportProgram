@@ -1,0 +1,137 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'sport-app-server/**'
+      - 'schema.sql'
+      - '.github/workflows/backend.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'sport-app-server/**'
+      - 'schema.sql'
+      - '.github/workflows/backend.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sport-app-server
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.x
+
+      - name: Install dependencies and build
+        run: |
+          dotnet restore sport-app-server.slnx
+          dotnet build sport-app-server.slnx -c Release --no-restore
+          # dotnet test
+
+      - name: GHCR Login
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push container
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ./sport-app-server
+          file: sport-app-server/sport-app-server/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Write CI .env
+        working-directory: ./sport-app-server
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_DB=sportprogram
+          POSTGRES_USER=sportprogram
+          POSTGRES_PASSWORD=ci-password
+          JWT_SECRET_KEY=ci-secret-key-at-least-32-chars!!
+          JWT_ISSUER=sport-app
+          JWT_AUDIENCE=sport-app-users
+          JWT_EXPIRATION_MINUTES=60
+          EOF
+      - name: Up
+        working-directory: ./sport-app-server
+        run: docker compose up -d --build --wait
+      - name: Probe
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/api/users/me || true)
+            [ "$code" = "401" ] && exit 0
+            sleep 2
+          done
+          docker compose -f sport-app-server/compose.yaml logs
+          exit 1
+      - name: Down
+        if: always()
+        working-directory: ./sport-app-server
+        run: docker compose down -v
+
+  deploy:
+    needs: smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 55340
+          script: |
+            set -e
+            cd /home/kuki4ek/SportProgram/sport-app-server
+            git pull
+            IMAGE_TAG=${{ github.sha }}
+            docker pull ghcr.io/kuki4ek/sportprogram:$IMAGE_TAG
+            # фиксируем тег в .env: заменяем строку, а если её нет — добавляем
+            if grep -q '^IMAGE_TAG=' .env; then
+              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env
+            else
+              echo "IMAGE_TAG=$IMAGE_TAG" >> .env
+            fi
+            docker compose pull sportprogram-api
+            docker compose up -d --wait
