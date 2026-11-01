@@ -38,7 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 
-private enum class AuthDestination {
+internal enum class AuthDestination {
     SPLASH,
     SAFETY_NOTE,
     INTRO,
@@ -665,7 +665,7 @@ fun AuthApp() {
     }
 }
 
-private fun normalizeBaseUrl(raw: String): String? {
+internal fun normalizeBaseUrl(raw: String): String? {
     val value = raw.trim().trimEnd('/')
     if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) return null
     val uri = android.net.Uri.parse(value)
@@ -675,10 +675,10 @@ private fun normalizeBaseUrl(raw: String): String? {
 }
 
 /** Client-side checks mirror the rules described by the C# registration endpoint. */
-private fun registrationUsernameError(value: String): String? =
+internal fun registrationUsernameError(value: String): String? =
     if (value.isBlank()) "Имя пользователя обязательно" else null
 
-private fun registrationEmailError(value: String): String? {
+internal fun registrationEmailError(value: String): String? {
     if (value.isBlank()) return "Почта обязательна"
     val atIndex = value.lastIndexOf('@')
     val dotIndex = value.lastIndexOf('.')
@@ -687,7 +687,7 @@ private fun registrationEmailError(value: String): String? {
     return if (valid) null else "Почта должна быть вида example@example.ru"
 }
 
-private fun registrationPhoneError(value: String): String? {
+internal fun registrationPhoneError(value: String): String? {
     if (value.isEmpty()) return null
     val pattern = Regex("^\\+\\d{1,4} \\(\\d{3}\\) \\d{3}-\\d{2}-\\d{2}$")
     return if (pattern.matches(value)) null else "Телефон должен быть вида +X (XXX) XXX-XX-XX"
