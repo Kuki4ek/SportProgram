@@ -500,7 +500,7 @@ fun QuestionnaireOptionsScreen(
     }
 }
 
-private fun emojiForOption(option: String): String = when (option) {
+internal fun emojiForOption(option: String): String = when (option) {
     "Фитнес" -> "🏋️"
     "Мотивация" -> "🏅"
     "Дисциплина" -> "⏱️"
@@ -775,7 +775,7 @@ fun BirthDateScreen(
     }
 }
 
-private fun daysInMonth(year: Int, month: Int): Int = when (month) {
+internal fun daysInMonth(year: Int, month: Int): Int = when (month) {
     2 -> if (year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)) 29 else 28
     4, 6, 9, 11 -> 30
     else -> 31
