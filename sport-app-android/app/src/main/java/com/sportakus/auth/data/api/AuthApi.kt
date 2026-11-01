@@ -277,7 +277,7 @@ object AuthApi {
         }
     }
 
-    private fun parseFieldErrors(errors: JSONObject?): Map<String, List<String>> {
+    internal fun parseFieldErrors(errors: JSONObject?): Map<String, List<String>> {
         if (errors == null) return emptyMap()
         val parsed = linkedMapOf<String, List<String>>()
         val iterator = errors.keys()
