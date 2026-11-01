@@ -1,9 +1,46 @@
 services:
-sportprogram-api:
-build:
-context: .
-dockerfile: sport-app-server/Dockerfile
-container_name: sportprogram-api
-restart: unless-stopped
-ports:
-- "127.0.0.1:18080:8080"
+  db:
+    image: postgres:17-alpine
+    container_name: sportprogram-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ../schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  sportprogram-api:
+    env_file: .env
+    image: ghcr.io/kuki4ek/sportprogram:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: sport-app-server/Dockerfile
+    pull_policy: ${PULL_POLICY:-missing}
+    container_name: sportprogram-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: db
+      EXTRA_PARAMS: SearchPath=public
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES}
+    ports:
+      - "127.0.0.1:5000:8080"
+
+volumes:
+  db_data:
