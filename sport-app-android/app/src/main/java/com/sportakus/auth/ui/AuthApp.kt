@@ -1,5 +1,7 @@
 package com.sportakus.auth.ui
 
+import com.sportakus.auth.ui.theme.sportakusTextColor
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -28,6 +31,7 @@ import androidx.compose.material3.TextButton
 import com.sportakus.auth.ui.theme.SportakusTheme
 import com.sportakus.auth.data.api.AuthApi
 import com.sportakus.auth.data.api.RegisterApiResult
+import com.sportakus.auth.data.api.EmailConfirmationApiResult
 import com.sportakus.auth.data.api.RegisterRequest
 import com.sportakus.auth.data.api.LoginApiRequest
 import com.sportakus.auth.data.api.LoginApiResult
@@ -85,12 +89,16 @@ fun AuthApp() {
         mutableStateOf(preferences.getString("api_base_url", defaultServerUrl) ?: defaultServerUrl)
     }
     var registrationSubmitting by remember { mutableStateOf(false) }
+    var registrationCodeRequesting by remember { mutableStateOf(false) }
     var loginSubmitting by remember { mutableStateOf(false) }
     var serverRegistrationFieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // This edition is intentionally dark-only; no theme switch is exposed.
-    val activeDarkTheme = true
+    // The selected theme is persisted. It is changed only from AuthWelcomeScreen,
+    // but the active color scheme applies to every screen in the app.
+    var activeDarkTheme by rememberSaveable {
+        mutableStateOf(preferences.getBoolean("dark_theme_enabled", true))
+    }
 
     // Authentication form state.
     var loginIdentifier by rememberSaveable { mutableStateOf("") }
@@ -132,8 +140,11 @@ fun AuthApp() {
     var questionnaireGoals by rememberSaveable { mutableStateOf("Больше двигаться|Поддерживать регулярность занятий") }
     var questionnaireMedical by rememberSaveable { mutableStateOf("Нет известных мне ограничений") }
 
-    // Kept as a no-op while the theme switch is intentionally disabled.
-    val toggleTheme: () -> Unit = {}
+    val toggleTheme: () -> Unit = {
+        val newValue = !activeDarkTheme
+        activeDarkTheme = newValue
+        preferences.edit().putBoolean("dark_theme_enabled", newValue).apply()
+    }
     val completeOnboarding: () -> Unit = {
         preferences.edit().putBoolean("onboarding_completed", true).apply()
         destination = AuthDestination.GUEST_HOME
@@ -157,7 +168,7 @@ fun AuthApp() {
             AuthDestination.LOGIN -> AuthDestination.AUTH_WELCOME
             AuthDestination.REGISTER -> AuthDestination.AUTH_WELCOME
             AuthDestination.REGISTER_CONTACT -> AuthDestination.REGISTER
-            AuthDestination.REGISTRATION_VERIFY_CODE -> AuthDestination.REGISTER_CONTACT
+            AuthDestination.REGISTRATION_VERIFY_CODE -> AuthDestination.REGISTER
             AuthDestination.RECOVERY -> AuthDestination.LOGIN
             AuthDestination.RECOVERY_VERIFY_CODE -> AuthDestination.RECOVERY
             AuthDestination.RESET_PASSWORD -> AuthDestination.RECOVERY_VERIFY_CODE
@@ -174,48 +185,38 @@ fun AuthApp() {
         val phoneError = registrationPhoneError(registrationPhone)
         val passwordError = when {
             registrationPassword.isBlank() -> "Пароль обязателен"
-            registrationPassword.length < 8 -> "Длина пароля должна быть не менее 8 символов"
+            registrationPassword.length <= 8 -> "Пароль должен быть длиннее 8 символов"
             else -> null
         }
         val locallyValid = loginError == null && emailError == null && phoneError == null && passwordError == null
 
+        // Step 1: validate locally and ask the server to send an email code.
+        // Account creation is intentionally deferred until the user submits that code.
         if (locallyValid && !registrationSubmitting) {
             serverRegistrationFieldErrors = emptyMap()
+            notice = null
             registrationSubmitting = true
             coroutineScope.launch {
                 val result = withContext(Dispatchers.IO) {
-                    AuthApi.register(
+                    AuthApi.requestEmailConfirmation(
                         baseUrl = serverBaseUrl,
-                        request = RegisterRequest(
-                            login = registrationLogin,
-                            email = registrationEmail,
-                            password = registrationPassword,
-                            phone = registrationPhone.takeIf { it.isNotBlank() }
-                        )
+                        login = registrationLogin,
+                        email = registrationEmail
                     )
                 }
                 registrationSubmitting = false
                 when (result) {
-                    is RegisterApiResult.Success -> {
-                        TokenStore.saveJwt(context, result.jwt)
-                        destination = AuthDestination.SERVER_HELLO
+                    is EmailConfirmationApiResult.Success -> {
+                        registrationVerificationCode = ""
+                        registrationResendKey += 1
+                        registrationContactMethod = "Почта"
+                        registrationContact = registrationEmail
+                        destination = AuthDestination.REGISTRATION_VERIFY_CODE
                         notice = null
                     }
-                    is RegisterApiResult.Failure -> {
-                        val mapped = linkedMapOf<String, String>()
-                        result.fieldErrors.forEach { (key, messages) ->
-                            val normalizedKey = when (key.lowercase()) {
-                                "username", "login" -> "login"
-                                "email" -> "email"
-                                "password" -> "password"
-                                "phone" -> "phone"
-                                else -> key.lowercase()
-                            }
-                            mapped[normalizedKey] = messages.joinToString("\n")
-                        }
-                        serverRegistrationFieldErrors = mapped
-                        if (mapped.isEmpty()) notice = result.message
-                        else notice = null
+                    is EmailConfirmationApiResult.Failure -> {
+                        serverRegistrationFieldErrors = mapRegistrationFieldErrors(result.fieldErrors)
+                        notice = result.message
                     }
                 }
             }
@@ -236,7 +237,9 @@ fun AuthApp() {
                         AuthApi.login(
                             baseUrl = serverBaseUrl,
                             request = LoginApiRequest(
-                                identifier = loginIdentifier,
+                                identifier = if (!loginIdentifier.contains('@') && loginIdentifier.all { it.isDigit() || it in "+ ()-" }) {
+                                    formatInternationalPhoneForApi(loginIdentifier) ?: loginIdentifier
+                                } else loginIdentifier,
                                 password = loginPassword
                             )
                         )
@@ -263,7 +266,7 @@ fun AuthApp() {
 
     LaunchedEffect(destination) {
         if (destination == AuthDestination.SPLASH) {
-            // Every app launch begins in the fixed dark theme.
+            // Every app launch begins with the persisted theme selection.
             delay(1200)
             if (destination == AuthDestination.SPLASH) {
                 destination = if (preferences.getBoolean("safety_note_seen", false)) {
@@ -275,7 +278,7 @@ fun AuthApp() {
         }
     }
 
-    SportakusTheme {
+    SportakusTheme(darkTheme = activeDarkTheme) {
         val view = LocalView.current
         val colors = MaterialTheme.colorScheme
         androidx.compose.runtime.SideEffect {
@@ -290,9 +293,16 @@ fun AuthApp() {
             }
         }
 
-        Surface(modifier = Modifier.fillMaxSize(), color = colors.background, contentColor = Color(0xFFF2F5EE)) {
-            Box(Modifier.fillMaxSize().imePadding()) {
-                when (destination) {
+        // Recreate screen-local remembered components when route or theme changes.
+        // Form data lives in AuthApp state, so credentials and questionnaire answers persist.
+        key(destination, activeDarkTheme) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = colors.background,
+                contentColor = sportakusTextColor()
+            ) {
+                Box(Modifier.fillMaxSize().imePadding()) {
+                    when (destination) {
                         AuthDestination.SPLASH -> SplashScreen()
 
                         AuthDestination.SAFETY_NOTE -> SafetyNoteScreen(darkTheme = activeDarkTheme) {
@@ -496,7 +506,7 @@ fun AuthApp() {
                             passwordError = serverRegistrationFieldErrors["password"] ?: if (registrationPasswordTouched || registrationAttempted) {
                                 when {
                                     registrationPassword.isBlank() -> "Пароль обязателен"
-                                    registrationPassword.length < 8 -> "Длина пароля должна быть не менее 8 символов"
+                                    registrationPassword.length <= 8 -> "Пароль должен быть длиннее 8 символов"
                                     else -> null
                                 }
                             } else null,
@@ -527,7 +537,7 @@ fun AuthApp() {
                             onSendCode = {
                                 val valid = if (registrationContactMethod == "Почта") registrationEmailError(registrationContact) == null else registrationPhoneError(registrationContact) == null && registrationContact.isNotBlank()
                                 if (!valid) {
-                                    notice = if (registrationContactMethod == "Почта") "Введите корректный адрес почты." else "Введите телефон в формате +X (XXX) XXX-XX-XX."
+                                    notice = if (registrationContactMethod == "Почта") "Введите корректный адрес почты." else "Введите корректный номер с международным кодом страны."
                                 } else {
                                     registrationVerificationCode = ""
                                     registrationResendKey += 1
@@ -537,22 +547,86 @@ fun AuthApp() {
                         )
 
                         AuthDestination.REGISTRATION_VERIFY_CODE -> CodeConfirmationScreen(
-                            title = "Подтвердите аккаунт",
-                            description = "Пожалуйста, введите код, который был отправлен на\n${registrationContact.ifBlank { registrationEmail }}",
+                            title = "Подтверждение почты",
+                            description = "Мы отправили шестизначный код подтверждения на\n${registrationEmail}",
                             code = registrationVerificationCode,
                             onCodeChange = { registrationVerificationCode = it },
                             darkTheme = activeDarkTheme,
                             onToggleTheme = toggleTheme,
                             resendResetKey = registrationResendKey,
-                            onResend = { registrationResendKey += 1; registrationVerificationCode = "" },
-                            onBack = { destination = AuthDestination.REGISTER_CONTACT },
+                            isSubmitting = registrationSubmitting,
+                            isResending = registrationCodeRequesting,
+                            onResend = {
+                                if (!registrationCodeRequesting && !registrationSubmitting) {
+                                    registrationCodeRequesting = true
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            AuthApi.requestEmailConfirmation(
+                                                baseUrl = serverBaseUrl,
+                                                login = registrationLogin,
+                                                email = registrationEmail
+                                            )
+                                        }
+                                        registrationCodeRequesting = false
+                                        when (result) {
+                                            is EmailConfirmationApiResult.Success -> {
+                                                registrationVerificationCode = ""
+                                                registrationResendKey += 1
+                                                notice = null
+                                            }
+                                            is EmailConfirmationApiResult.Failure -> {
+                                                notice = result.message
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onBack = {
+                                registrationVerificationCode = ""
+                                destination = AuthDestination.REGISTER
+                            },
                             onConfirm = {
-                                if (registrationVerificationCode.length < 4) notice = "Введите код подтверждения."
-                                else {
-                                    loginIdentifier = registrationContact
-                                    loginPassword = ""
-                                    destination = AuthDestination.LOGIN
-                                    notice = "Экран регистрации пройден в демонстрационном режиме. Серверная проверка кода пока не подключена."
+                                when {
+                                    registrationVerificationCode.length != 6 -> notice = "Введите все 6 цифр кода из письма."
+                                    registrationSubmitting || registrationCodeRequesting -> Unit
+                                    else -> {
+                                        notice = null
+                                        registrationSubmitting = true
+                                        coroutineScope.launch {
+                                            val result = withContext(Dispatchers.IO) {
+                                                AuthApi.register(
+                                                    baseUrl = serverBaseUrl,
+                                                    request = RegisterRequest(
+                                                        login = registrationLogin,
+                                                        email = registrationEmail,
+                                                        password = registrationPassword,
+                                                        code = registrationVerificationCode,
+                                                        phone = registrationPhone.takeIf { it.isNotBlank() }
+                                                            ?.let { formatPhoneForRegistrationApi(it) }
+                                                    )
+                                                )
+                                            }
+                                            registrationSubmitting = false
+                                            when (result) {
+                                                is RegisterApiResult.Success -> {
+                                                    TokenStore.saveJwt(context, result.jwt)
+                                                    destination = AuthDestination.SERVER_HELLO
+                                                    notice = null
+                                                }
+                                                is RegisterApiResult.Failure -> {
+                                                    val mappedErrors = mapRegistrationFieldErrors(result.fieldErrors)
+                                                    serverRegistrationFieldErrors = mappedErrors
+                                                    val details = result.fieldErrors.values.flatten().distinct().joinToString("\n")
+                                                    notice = if (details.isBlank()) result.message else "${result.message}\n$details"
+                                                    // Field errors that require editing the form should return the user there;
+                                                    // code-related errors keep the user on the confirmation screen.
+                                                    if (mappedErrors.keys.any { it != "code" }) {
+                                                        destination = AuthDestination.REGISTER
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -566,8 +640,8 @@ fun AuthApp() {
                             onToggleTheme = toggleTheme,
                             onBack = { destination = AuthDestination.LOGIN },
                             onSendCode = {
-                                val valid = if (recoveryMethod == "Почта") registrationEmailError(recoveryContact) == null else recoveryContact.count(Char::isDigit) >= 7
-                                if (!valid) notice = if (recoveryMethod == "Почта") "Введите корректный адрес почты." else "Введите корректный номер телефона."
+                                val valid = if (recoveryMethod == "Почта") registrationEmailError(recoveryContact) == null else recoveryContact.isNotBlank() && isCompleteInternationalPhone(recoveryContact)
+                                if (!valid) notice = if (recoveryMethod == "Почта") "Введите корректный адрес почты." else "Введите корректный номер с международным кодом страны."
                                 else {
                                     recoveryVerificationCode = ""
                                     recoveryResendKey += 1
@@ -578,7 +652,7 @@ fun AuthApp() {
 
                         AuthDestination.RECOVERY_VERIFY_CODE -> CodeConfirmationScreen(
                             title = "Восстановление пароля",
-                            description = "Введите код подтверждения, отправленный на\n$recoveryContact",
+                            description = "Введите код подтверждения, отправленный на\n${if (recoveryMethod == "Телефон") formatInternationalPhone(recoveryContact) else recoveryContact}",
                             code = recoveryVerificationCode,
                             onCodeChange = { recoveryVerificationCode = it },
                             darkTheme = activeDarkTheme,
@@ -620,6 +694,7 @@ fun AuthApp() {
                         )
 
                         AuthDestination.SERVER_SETTINGS -> ServerSettingsScreen(
+                            darkTheme = activeDarkTheme,
                             baseUrl = serverUrlDraft,
                             onBaseUrlChange = { serverUrlDraft = it },
                             onBack = { destination = serverSettingsReturn },
@@ -650,20 +725,34 @@ fun AuthApp() {
                 notice?.let { message ->
                     AlertDialog(
                         onDismissRequest = { notice = null },
-                        title = { DarkText("Спортакус", color = Color(0xFFF2F5EE)) },
-                        text = { DarkText(message, color = Color(0xFFF2F5EE)) },
+                        title = { DarkText("Спортакус", color = sportakusTextColor()) },
+                        text = { DarkText(message, color = sportakusTextColor()) },
                         confirmButton = {
-                            TextButton(onClick = { notice = null }) { DarkText("Понятно", color = Color(0xFFF2F5EE)) }
+                            TextButton(onClick = { notice = null }) { DarkText("Понятно", color = sportakusTextColor()) }
                         },
                         containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = Color(0xFFF2F5EE),
-                        textContentColor = Color(0xFFF2F5EE)
+                        titleContentColor = sportakusTextColor(),
+                        textContentColor = sportakusTextColor()
                     )
+                }
                 }
             }
         }
     }
 }
+
+private fun mapRegistrationFieldErrors(errors: Map<String, List<String>>): Map<String, String> =
+    errors.entries.associate { (key, messages) ->
+        val normalizedKey = when (key.lowercase()) {
+            "username", "login" -> "login"
+            "email", "mail" -> "email"
+            "password" -> "password"
+            "phone", "phonenumber", "phone_number" -> "phone"
+            "code", "confirmcode", "confirmationcode", "verificationcode" -> "code"
+            else -> key.lowercase()
+        }
+        normalizedKey to messages.joinToString("\n")
+    }
 
 private fun normalizeBaseUrl(raw: String): String? {
     val value = raw.trim().trimEnd('/')
@@ -688,9 +777,8 @@ private fun registrationEmailError(value: String): String? {
 }
 
 private fun registrationPhoneError(value: String): String? {
-    if (value.isEmpty()) return null
-    val pattern = Regex("^\\+\\d{1,4} \\(\\d{3}\\) \\d{3}-\\d{2}-\\d{2}$")
-    return if (pattern.matches(value)) null else "Телефон должен быть вида +X (XXX) XXX-XX-XX"
+    if (value.isBlank()) return null
+    return if (isCompleteInternationalPhone(value)) null else "Введите корректный номер с международным кодом страны."
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

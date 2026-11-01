@@ -11,8 +11,8 @@ android {
         applicationId = "com.sportakus.auth.dark"
         minSdk = 24
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.11-register-login-user-test"
+        versionCode = 21
+        versionName = "1.20-email-confirmation"
     }
 
     buildTypes {
@@ -53,6 +53,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("com.googlecode.libphonenumber:libphonenumber:9.0.41")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

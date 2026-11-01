@@ -11,6 +11,7 @@ data class RegisterRequest(
     val login: String,
     val email: String,
     val password: String,
+    val code: String,
     val phone: String? = null
 )
 
@@ -21,6 +22,15 @@ sealed class RegisterApiResult {
         val message: String,
         val fieldErrors: Map<String, List<String>> = emptyMap()
     ) : RegisterApiResult()
+}
+
+sealed class EmailConfirmationApiResult {
+    data class Success(val httpStatus: Int) : EmailConfirmationApiResult()
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val fieldErrors: Map<String, List<String>> = emptyMap()
+    ) : EmailConfirmationApiResult()
 }
 
 sealed class CurrentUserApiResult {
@@ -45,6 +55,73 @@ sealed class LoginApiResult {
 
 /** Small HTTP client for the current registration endpoint; no additional JSON library is required. */
 object AuthApi {
+    /** Ask the server to email a confirmation code. Registration is not created yet. */
+    fun requestEmailConfirmation(
+        baseUrl: String,
+        login: String,
+        email: String
+    ): EmailConfirmationApiResult {
+        var connection: HttpURLConnection? = null
+        return try {
+            val normalized = baseUrl.trim().trimEnd('/')
+            require(normalized.startsWith("http://", ignoreCase = true) || normalized.startsWith("https://", ignoreCase = true)) {
+                "Адрес сервера должен начинаться с http:// или https://."
+            }
+            require(login.isNotBlank()) { "Введите имя пользователя." }
+            require(email.isNotBlank()) { "Введите адрес электронной почты." }
+
+            val payload = JSONObject().apply {
+                put("login", login.trim())
+                put("email", email.trim())
+            }
+            connection = (URL("$normalized/api/auth/request-email-confirm").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 12_000
+                readTimeout = 15_000
+                doOutput = true
+                useCaches = false
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+            }
+            connection!!.outputStream.use { stream ->
+                stream.write(payload.toString().toByteArray(Charsets.UTF_8))
+            }
+
+            val status = connection!!.responseCode
+            val responseStream = if (status >= 400) connection!!.errorStream else connection!!.inputStream
+            val body = responseStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val json = body.takeIf { it.isNotBlank() }?.let { runCatching { JSONObject(it) }.getOrNull() }
+            if (status in 200..299) {
+                EmailConfirmationApiResult.Success(status)
+            } else {
+                val errors = parseFieldErrors(json?.optJSONObject("errors"))
+                val message = when {
+                    status == 404 -> "Endpoint /api/auth/request-email-confirm не найден. Проверь маршрут на C#-сервере."
+                    status == 429 -> "Слишком много запросов на отправку кода. Подожди и попробуй снова."
+                    status == 400 -> json?.optString("detail")?.takeIf { it.isNotBlank() }
+                        ?: "Сервер не смог отправить код. Проверь имя пользователя и почту."
+                    status in 500..599 -> "Ошибка сервера ($status) при отправке кода. Проверь журнал C# API."
+                    else -> json?.optString("detail")?.takeIf { it.isNotBlank() }
+                        ?: json?.optString("title")?.takeIf { it.isNotBlank() }
+                        ?: "Сервер не подтвердил отправку кода (HTTP $status)."
+                }
+                EmailConfirmationApiResult.Failure(status, message, errors)
+            }
+        } catch (e: UnknownHostException) {
+            EmailConfirmationApiResult.Failure(null, "Не удалось найти сервер. Проверь адрес API и подключение к сети.")
+        } catch (e: SocketTimeoutException) {
+            EmailConfirmationApiResult.Failure(null, "Сервер не ответил вовремя при отправке кода.")
+        } catch (e: java.net.ConnectException) {
+            EmailConfirmationApiResult.Failure(null, "Не удалось подключиться к серверу. Проверь порт, адрес и настройки брандмауэра.")
+        } catch (e: IllegalArgumentException) {
+            EmailConfirmationApiResult.Failure(null, e.message ?: "Проверь адрес сервера.")
+        } catch (e: Exception) {
+            EmailConfirmationApiResult.Failure(null, "Не удалось отправить код: ${e.localizedMessage ?: e.javaClass.simpleName}")
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
     fun register(baseUrl: String, request: RegisterRequest): RegisterApiResult {
         var connection: HttpURLConnection? = null
         return try {
@@ -57,6 +134,7 @@ object AuthApi {
                 put("login", request.login.trim())
                 put("email", request.email.trim())
                 put("password", request.password)
+                put("code", request.code.trim())
                 request.phone?.trim()?.takeIf { it.isNotEmpty() }?.let { put("phone", it) }
             }
 
@@ -82,7 +160,13 @@ object AuthApi {
             }
 
             if (status in 200..299) {
-                val jwt = responseJson?.optString("jwt")?.trim().orEmpty()
+                val bodyJwt = listOf("jwt", "JWT", "access_token", "accessToken")
+                    .firstNotNullOfOrNull { key -> responseJson?.optString(key)?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
+                val authorization = connection!!.getHeaderField("Authorization")?.trim().orEmpty()
+                val headerJwt = if (authorization.startsWith("Bearer ", ignoreCase = true)) {
+                    authorization.substringAfter(' ').trim()
+                } else ""
+                val jwt = bodyJwt ?: headerJwt
                 if (jwt.isNotBlank() && jwt != "null") {
                     RegisterApiResult.Success(jwt = jwt, httpStatus = status)
                 } else {
@@ -94,7 +178,7 @@ object AuthApi {
             } else {
                 val fieldErrors = parseFieldErrors(responseJson?.optJSONObject("errors"))
                 val message = when (status) {
-                    400 -> "Сервер отклонил регистрацию. Проверь поля, отмеченные сообщениями об ошибках."
+                    400 -> "Сервер отклонил регистрацию. Проверь код подтверждения и введённые данные."
                     401 -> "Сервер вернул 401 Unauthorized. Уточни у разработчика, доступна ли регистрация без авторизации."
                     in 500..599 -> "Ошибка сервера ($status). Посмотри журнал C# API."
                     else -> responseJson?.optString("title")?.takeIf { it.isNotBlank() }
@@ -165,7 +249,13 @@ object AuthApi {
             }
 
             if (status in 200..299) {
-                val jwt = responseJson?.optString("jwt")?.trim().orEmpty()
+                val bodyJwt = listOf("jwt", "JWT", "access_token", "accessToken")
+                    .firstNotNullOfOrNull { key -> responseJson?.optString(key)?.trim()?.takeIf { it.isNotBlank() && it != "null" } }
+                val authorization = connection!!.getHeaderField("Authorization")?.trim().orEmpty()
+                val headerJwt = if (authorization.startsWith("Bearer ", ignoreCase = true)) {
+                    authorization.substringAfter(' ').trim()
+                } else ""
+                val jwt = bodyJwt ?: headerJwt
                 if (jwt.isNotBlank() && jwt != "null") {
                     LoginApiResult.Success(jwt, status)
                 } else {
