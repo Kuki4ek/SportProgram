@@ -31,6 +31,7 @@ namespace sport_app_server
     public record ResetPasswordTokenAnswer(string ResetPasswordToken);
     public record RefreshTokenRequest(string RefreshToken);
     public record RefreshTokenAnswer(string JWT, string RefreshToken);
+    public record LogoutRequest(string RefreshToken);
     public class Program
     {
         
@@ -516,6 +517,19 @@ namespace sport_app_server
                 await db.SaveChangesAsync();
                 return Results.Ok(new RefreshTokenAnswer(jwt, newRefreshToken));
             });
+            app.MapPost("/api/auth/logout", async ([FromBody] LogoutRequest request, ClaimsPrincipal user, sportappContext db) =>
+            {
+                string hashedToken = Tools.HashString(request.RefreshToken);
+                RefreshToken RefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken);
+                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
+                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                if (RefreshToken != null && currentUser != null && RefreshToken.RevokedAt == null && RefreshToken.UserId == currentUser.Id)
+                {
+                    RefreshToken.RevokedAt = DateTime.UtcNow;
+                }
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
             app.Run();
         }
         
