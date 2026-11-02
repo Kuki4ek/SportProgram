@@ -13,13 +13,19 @@ public partial class UserTask
 
     public Guid UserId { get; set; }
 
-    public bool IsCompleted { get; set; }
+    public string Status { get; set; }
 
     public DateTime CreatedAt { get; set; }
+
+    public DateTime? EndedAt { get; set; }
+
+    public int RewardSum { get; set; }
 
     public virtual ICollection<ExerciseJournal> ExerciseJournals { get; set; } = new List<ExerciseJournal>();
 
     public virtual Task Task { get; set; }
+
+    public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 
     public virtual User User { get; set; }
 }

@@ -5,11 +5,13 @@ using System.Collections.Generic;
 
 namespace sport_app_server.Models;
 
-public partial class Reward
+public partial class Category
 {
     public int Id { get; set; }
 
-    public int Amount { get; set; }
+    public string Name { get; set; }
 
-    public virtual ICollection<Task> Tasks { get; set; } = new List<Task>();
+    public string Icon { get; set; }
+
+    public virtual ICollection<Item> Items { get; set; } = new List<Item>();
 }

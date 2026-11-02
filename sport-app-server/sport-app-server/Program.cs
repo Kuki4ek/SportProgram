@@ -15,18 +15,20 @@ using Npgsql;
 using Org.BouncyCastle.Asn1.Ocsp;
 using sport_app_server.Models;
 using System.IdentityModel.Tokens.Jwt;
-using System.Net.Mail;
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace sport_app_server
 {
     public record LoginRecord(string Login, string Email, string Password, string? Phone, string? EmailCode);
     public record LoginAnswner(string JWT);
     public record EmailConfirmRequest(string Login, string Email);
-    // public record PasswordResetRequest(string Email, string CodeToken, string Code, string ResetTocken);
+    public record ForgotPasswordRequest(string Email, string Phone, string Login);
+    public record ForgotPasswordCodeRequest(string Email, string Phone, string Login, string CodeToken, string EmailCode);
+    public record ForgotPasswordResetRequest(string Email, string Phone, string Login, string ResetPasswordToken, string NewPassword);
+    public record CodeTokenAnswner(string CodeToken);
+    public record ResetPasswordTokenAnswner(string ResetPasswordToken);
     public class Program
     {
         
@@ -75,6 +77,7 @@ namespace sport_app_server
             builder.Services.AddAuthorization();
             builder.Services.AddMemoryCache();
             builder.Services.AddOpenApi();
+            builder.Services.AddHealthChecks().AddNpgSql(databaseConnectParams);
 
             var app = builder.Build();
 
@@ -88,6 +91,7 @@ namespace sport_app_server
             app.UseAuthentication();
             app.UseAuthorization();
 
+            app.MapHealthChecks("/health");
             app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, sportappContext db, IMemoryCache cache) =>
             {
                 var errors = new Dictionary<string, string[]>();
@@ -142,11 +146,12 @@ namespace sport_app_server
                 }
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
-
+                cache.Remove(cacheKey);
                 User newUser = new User();
                 newUser.Id = Guid.NewGuid();
-                newUser.Nickname = request.Login;
+                newUser.Login = request.Login;
                 newUser.Balance = 0;
+                newUser.XpPoints = 0;
                 newUser.DaysStraight = 0;
                 newUser.Email = request.Email;
                 if (!string.IsNullOrEmpty(request.Phone))
@@ -173,7 +178,7 @@ namespace sport_app_server
                 User? currentUser = null;
                 if (!loginCheck.error && !passwordCheck.error)
                 {
-                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Nickname == request.Login);
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == request.Login);
                 }
                 else if (!emailCheck.error && !passwordCheck.error)
                 { 
@@ -210,11 +215,11 @@ namespace sport_app_server
             });
             app.MapGet("/api/users/me", async (ClaimsPrincipal user, sportappContext db) =>
             {
-                var userName = user.FindFirst(ClaimTypes.Name)?.Value;
-                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Nickname == userName);
+                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
+                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
                 return Results.Ok(new
                 {
-                    login = currentUser.Nickname,
+                    login = currentUser.Login,
                     phone = currentUser.PhoneNumber,
                     email = currentUser.Email,
                     createdAt = currentUser.CreatedAt,
@@ -260,26 +265,176 @@ namespace sport_app_server
 
                 return Results.Ok();
             });
+            app.MapPost("/api/auth/forgot-password/request", async ([FromBody] ForgotPasswordRequest request, sportappContext db, IMemoryCache cache) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                CheckResult loginCheck = Tools.CheckLogin(request.Login);
+                CheckResult emailCheck = Tools.CheckEmail(request.Email);
+                CheckResult phoneCheck = Tools.CheckPhone(request.Phone);
 
-            //----------------------Заготовка сброса пароля-------------------------------------------------------------------------
-            //app.MapGet("/api/auth/forgot-password/request", async ([FromBody] PasswordResetRequest request, sportappContext db) =>
-            //{
-            //    var errors = new Dictionary<string, string[]>();
-            //    CheckResult emailCheck = Tools.CheckEmail(request.Email);
-            //    if (emailCheck.error)
-            //        errors["email"] = new[] { emailCheck.errorMessage };
+                var users = await db.Users.ToListAsync();
+                User? currentUser = null;
+                if (!loginCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == request.Login);
+                }
+                else if (!emailCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Email == request.Email);
+                }
+                else if (!string.IsNullOrEmpty(request.Phone) && !phoneCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.PhoneNumber == request.Phone);
+                }
 
+                if (currentUser == null || string.IsNullOrEmpty(currentUser.PasswordHash))
+                {
+                    errors["authentification"] = new[] { "Данные введены не корректно" };
+                }
 
-            //    if (errors.Count > 0)
-            //        return Results.ValidationProblem(errors);
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
 
+                string token = Tools.GenerateToken(32);
+                string cacheKey = $"code_token_{token}_{currentUser.Login}";
+                string code = Tools.GenerateCode();
+                string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
+                EmailData emailData = new EmailData("Подтверждение ", EmailGenerator.GenerateCodeHTML(currentUser.Login, code));
+                if (EmailSender.SendEmail(currentUser.Login, currentUser.Email, emailData, emailKey).Result)
+                    cache.Set(cacheKey, codeHash, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+                    });
+                else
+                    return Results.InternalServerError();
+                CodeTokenAnswner passwordResetAnswner = new CodeTokenAnswner(token);
+                return Results.Ok(passwordResetAnswner);
+            });
+            app.MapPost("/api/auth/forgot-password/code", async ([FromBody] ForgotPasswordCodeRequest request, sportappContext db, IMemoryCache cache) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                CheckResult loginCheck = Tools.CheckLogin(request.Login);
+                CheckResult emailCheck = Tools.CheckEmail(request.Email);
+                CheckResult phoneCheck = Tools.CheckPhone(request.Phone);
 
-            //    return Results.Ok();
+                var users = await db.Users.ToListAsync();
+                User? currentUser = null;
+                if (!loginCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == request.Login);
+                }
+                else if (!emailCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Email == request.Email);
+                }
+                else if (!string.IsNullOrEmpty(request.Phone) && !phoneCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.PhoneNumber == request.Phone);
+                }
 
-            //});
+                if (currentUser == null)
+                {
+                    errors["authentification"] = new[] { "Данные введены не корректно" };
+                }
 
-            
-            
+                if (string.IsNullOrEmpty(request.CodeToken))
+                {
+                    errors["CodeToken"] = new[] { "Для отправки кода необходим токен" };
+                }
+
+                if (string.IsNullOrEmpty(request.EmailCode))
+                {
+                    errors["EmailCode"] = new[] { "Необходим код подтверждения" };
+                }
+                if (currentUser != null)
+                {
+                    string cacheKey = $"code_token_{request.CodeToken}_{currentUser.Login}";
+                    string? codeHash = cache.Get<string>(cacheKey);
+                    if (string.IsNullOrEmpty(codeHash))
+                    {
+                        errors["password"] = new[] { "Запроса на смену пароля не обнаружено" };
+                    }
+                    else if (!string.IsNullOrEmpty(request.EmailCode) && !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                    {
+                        errors["EmailCode"] = new[] { "Код неверный" };
+                    }
+                }
+                else
+                {
+                    errors["user"] = new[] { "Ошибка" };
+                }
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                string resetToken = Tools.GenerateToken(32);
+                string tokenHash = BCrypt.Net.BCrypt.HashPassword(resetToken, workFactor: 12);
+                string resetTokenCacheKey = $"password_reset_{currentUser.Login}";
+                cache.Remove($"code_token_{request.CodeToken}_{currentUser.Login}");
+                cache.Set(resetTokenCacheKey, tokenHash, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+                });
+                Console.WriteLine($"resetTokenCacheKey: {resetTokenCacheKey}");
+                ResetPasswordTokenAnswner answner = new ResetPasswordTokenAnswner(resetToken);
+                return Results.Ok(answner);
+            });
+            app.MapPost("/api/auth/forgot-password/reset", async ([FromBody] ForgotPasswordResetRequest request, sportappContext db, IMemoryCache cache) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                CheckResult loginCheck = Tools.CheckLogin(request.Login);
+                CheckResult emailCheck = Tools.CheckEmail(request.Email);
+                CheckResult phoneCheck = Tools.CheckPhone(request.Phone);
+                CheckResult passwordCheck = Tools.CheckPassword(request.NewPassword);
+
+                var users = await db.Users.ToListAsync();
+                User? currentUser = null;
+                if (!loginCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == request.Login);
+                }
+                else if (!emailCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.Email == request.Email);
+                }
+                else if (!string.IsNullOrEmpty(request.Phone) && !phoneCheck.error)
+                {
+                    currentUser = await db.Users.FirstOrDefaultAsync(user => user.PhoneNumber == request.Phone);
+                }
+
+                if(passwordCheck.error)
+                {
+                    errors["password"] = new[] { passwordCheck.errorMessage };
+                }
+
+                if (currentUser == null || string.IsNullOrEmpty(currentUser.PasswordHash))
+                {
+                    errors["authentification"] = new[] { "Данные введены не корректно" };
+                }
+
+                if (currentUser != null)
+                {
+                    string cacheKey = $"password_reset_{currentUser.Login}";
+                    Console.WriteLine($"resetTokenCacheKey: {cacheKey}");
+                    string? tokenHash = cache.Get<string>(cacheKey);
+                    Console.WriteLine($"tokenHash: {tokenHash}");
+                    if (string.IsNullOrEmpty(tokenHash))
+                    {
+                        errors["password"] = new[] { "Запроса на смену пароля не обнаружено" };
+                    }
+                    else if (!string.IsNullOrEmpty(request.ResetPasswordToken) && !BCrypt.Net.BCrypt.Verify(request.ResetPasswordToken, tokenHash))
+                    {
+                        errors["EmailCode"] = new[] { "Код неверный" };
+                    }
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                currentUser.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
+                cache.Remove($"password_reset_{currentUser.Login}");
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            });
             app.Run();
         }
         
@@ -288,7 +443,7 @@ namespace sport_app_server
             var claims = new List<Claim>
             {
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                new Claim(ClaimTypes.Name, user.Nickname),
+                new Claim(ClaimTypes.Name, user.Login),
                 new Claim(ClaimTypes.Role, "user")
             };
 

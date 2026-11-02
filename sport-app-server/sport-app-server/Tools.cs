@@ -1,4 +1,5 @@
 ﻿using System.Security.Cryptography;
+using System.Text;
 
 namespace sport_app_server
 {
@@ -117,6 +118,17 @@ namespace sport_app_server
         public static string GenerateCode(int digits = 6)
         {
             return RandomNumberGenerator.GetInt32((int)Math.Pow(10,(digits - 1)), (int)Math.Pow(10, digits)).ToString();
+        }
+        public static string GenerateToken(int length)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+            string charSet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+            StringBuilder token = new StringBuilder();
+            for (int i = 0; i < length; i++)
+            {
+                token.Append(charSet[RandomNumberGenerator.GetInt32(charSet.Length)]);
+            }
+            return token.ToString();
         }
     }
 }

@@ -9,13 +9,17 @@ public partial class Task
 {
     public Guid Id { get; set; }
 
-    public int RewardId { get; set; }
+    public string Name { get; set; }
+
+    public string Description { get; set; }
+
+    public int EstimatedDurationMinutes { get; set; }
+
+    public string CoverImage { get; set; }
 
     public virtual ICollection<ExerciseInTask> ExerciseInTasks { get; set; } = new List<ExerciseInTask>();
 
-    public virtual Reward Reward { get; set; }
-
-    public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
-
     public virtual ICollection<UserTask> UserTasks { get; set; } = new List<UserTask>();
+
+    public virtual ICollection<Tag> Tags { get; set; } = new List<Tag>();
 }

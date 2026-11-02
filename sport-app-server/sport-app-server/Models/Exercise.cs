@@ -15,6 +15,10 @@ public partial class Exercise
 
     public string Animation { get; set; }
 
+    public float DefaultCalories { get; set; }
+
+    public int Reward { get; set; }
+
     public virtual ICollection<ExerciseInTask> ExerciseInTasks { get; set; } = new List<ExerciseInTask>();
 
     public virtual ICollection<ExerciseJournal> ExerciseJournals { get; set; } = new List<ExerciseJournal>();
