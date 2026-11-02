@@ -22,13 +22,15 @@ using System.Text;
 namespace sport_app_server
 {
     public record LoginRecord(string Login, string Email, string Password, string? Phone, string? EmailCode);
-    public record LoginAnswner(string JWT);
+    public record LoginAnswer(string RefreshToken);
     public record EmailConfirmRequest(string Login, string Email);
     public record ForgotPasswordRequest(string Email, string Phone, string Login);
     public record ForgotPasswordCodeRequest(string Email, string Phone, string Login, string CodeToken, string EmailCode);
     public record ForgotPasswordResetRequest(string Email, string Phone, string Login, string ResetPasswordToken, string NewPassword);
-    public record CodeTokenAnswner(string CodeToken);
-    public record ResetPasswordTokenAnswner(string ResetPasswordToken);
+    public record CodeTokenAnswer(string CodeToken);
+    public record ResetPasswordTokenAnswer(string ResetPasswordToken);
+    public record RefreshTokenRequest(string RefreshToken);
+    public record RefreshTokenAnswer(string JWT, string RefreshToken);
     public class Program
     {
         
@@ -92,7 +94,7 @@ namespace sport_app_server
             app.UseAuthorization();
 
             app.MapHealthChecks("/health");
-            app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, sportappContext db, IMemoryCache cache) =>
+            app.MapPost("/api/auth/register", async ([FromBody] LoginRecord request, HttpContext httpContext, sportappContext db, IMemoryCache cache) =>
             {
                 var errors = new Dictionary<string, string[]>();
                 CheckResult loginCheck = Tools.CheckLogin(request.Login);
@@ -158,15 +160,27 @@ namespace sport_app_server
                     newUser.PhoneNumber = request.Phone;
                 newUser.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, workFactor: 12);
                 newUser.CreatedAt = DateTime.UtcNow;
-
                 db.Users.Add(newUser);
+                
+                string refreshToken = Tools.GenerateToken(32);
+                RefreshToken newRefreshToken = new RefreshToken
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = newUser.Id,
+                    TokenHash = Tools.HashString(refreshToken),
+                    ExpiresAt = DateTime.UtcNow.AddDays(30),
+                    Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
+                    CreatedAt = DateTime.UtcNow,
+                    Ip = httpContext.Connection.RemoteIpAddress,
+                    // User = newUser
+                };
+                db.RefreshTokens.Add(newRefreshToken);
                 await db.SaveChangesAsync();
 
-                string jwt = GenerateJwtToken(newUser, secretKey, issuer, audience, jwtExpirationMinutes);
-                LoginAnswner loginAnswner = new LoginAnswner(jwt);
-                return Results.Ok(loginAnswner);
+                LoginAnswer loginAnswer = new LoginAnswer(refreshToken);
+                return Results.Ok(loginAnswer);
             });
-            app.MapPost("/api/auth/login", async ([FromBody] LoginRecord request, sportappContext db) =>
+            app.MapPost("/api/auth/login", async ([FromBody] LoginRecord request, HttpContext httpContext, sportappContext db) =>
             {
                 var errors = new Dictionary<string, string[]>();
                 CheckResult loginCheck = Tools.CheckLogin(request.Login);
@@ -207,11 +221,23 @@ namespace sport_app_server
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
+                string refreshToken = Tools.GenerateToken(32);
+                RefreshToken newRefreshToken = new RefreshToken
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = currentUser.Id,
+                    TokenHash = Tools.HashString(refreshToken),
+                    ExpiresAt = DateTime.UtcNow.AddDays(30),
+                    Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
+                    CreatedAt = DateTime.UtcNow,
+                    Ip = httpContext.Connection.RemoteIpAddress,
+                    User = currentUser
+                };
+                db.RefreshTokens.Add(newRefreshToken);
                 await db.SaveChangesAsync();
 
-                string jwt = GenerateJwtToken(currentUser, secretKey, issuer, audience, jwtExpirationMinutes);
-                LoginAnswner loginAnswner = new LoginAnswner(jwt);
-                return Results.Ok(loginAnswner);
+                LoginAnswer loginAnswer = new LoginAnswer(refreshToken);
+                return Results.Ok(loginAnswer);
             });
             app.MapGet("/api/users/me", async (ClaimsPrincipal user, sportappContext db) =>
             {
@@ -307,8 +333,8 @@ namespace sport_app_server
                     });
                 else
                     return Results.InternalServerError();
-                CodeTokenAnswner passwordResetAnswner = new CodeTokenAnswner(token);
-                return Results.Ok(passwordResetAnswner);
+                CodeTokenAnswer passwordResetAnswer = new CodeTokenAnswer(token);
+                return Results.Ok(passwordResetAnswer);
             });
             app.MapPost("/api/auth/forgot-password/code", async ([FromBody] ForgotPasswordCodeRequest request, sportappContext db, IMemoryCache cache) =>
             {
@@ -375,8 +401,8 @@ namespace sport_app_server
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
                 });
                 Console.WriteLine($"resetTokenCacheKey: {resetTokenCacheKey}");
-                ResetPasswordTokenAnswner answner = new ResetPasswordTokenAnswner(resetToken);
-                return Results.Ok(answner);
+                ResetPasswordTokenAnswer answer = new ResetPasswordTokenAnswer(resetToken);
+                return Results.Ok(answer);
             });
             app.MapPost("/api/auth/forgot-password/reset", async ([FromBody] ForgotPasswordResetRequest request, sportappContext db, IMemoryCache cache) =>
             {
@@ -434,6 +460,61 @@ namespace sport_app_server
                 cache.Remove($"password_reset_{currentUser.Login}");
                 await db.SaveChangesAsync();
                 return Results.Ok();
+            });
+            app.MapPost("/api/auth/refresh", async([FromBody] RefreshTokenRequest request, HttpContext httpContext, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+
+                if(string.IsNullOrEmpty(request.RefreshToken))
+                {
+                    errors["RefreshToken"] = new[] { "RefreshToken не может быть пустым" };
+                }
+
+                string hashedToken = Tools.HashString(request.RefreshToken);
+                User? user = null;
+                string device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown";
+                RefreshToken oldRefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken && rt.Device == device);
+                if (oldRefreshToken == null)
+                {
+                    return Results.Unauthorized();
+                }
+                else if (oldRefreshToken.ExpiresAt < DateTime.UtcNow)
+                {
+                    return Results.Unauthorized();
+                }
+                else if (oldRefreshToken.RevokedAt != null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (oldRefreshToken != null)
+                {
+                    user = oldRefreshToken.User;
+                }
+                if (user == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                string jwt = GenerateJwtToken(user, secretKey, issuer, audience, jwtExpirationMinutes);
+                string newRefreshToken = Tools.GenerateToken(32);
+                RefreshToken NewRefreshToken = new RefreshToken
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = user.Id,
+                    TokenHash = Tools.HashString(newRefreshToken),
+                    ExpiresAt = DateTime.UtcNow.AddDays(30),
+                    Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
+                    CreatedAt = DateTime.UtcNow,
+                    Ip = httpContext.Connection.RemoteIpAddress,
+                    User = user,
+                };
+                oldRefreshToken.RevokedAt = DateTime.UtcNow;
+                oldRefreshToken.ReplacedBy = NewRefreshToken.Id;
+                db.RefreshTokens.Add(NewRefreshToken);
+                await db.SaveChangesAsync();
+                return Results.Ok(new RefreshTokenAnswer(jwt, newRefreshToken));
             });
             app.Run();
         }
