@@ -15,6 +15,11 @@ namespace sport_app_server
     }
     public static class Tools
     {
+        public static string HashString(string stringToHash)
+        {
+            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(stringToHash));
+            return Convert.ToBase64String(bytes);
+        }
         public static CheckResult CheckLogin(string login)
         {
             CheckResult checkResult = new CheckResult();
