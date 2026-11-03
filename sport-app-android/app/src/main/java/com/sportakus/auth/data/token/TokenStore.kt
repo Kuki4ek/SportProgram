@@ -2,34 +2,47 @@ package com.sportakus.auth.data.token
 
 import android.content.Context
 
-/**
- * Simple persistent JWT storage for the team's test build.
- * For production, replace with encrypted storage backed by Android Keystore.
- */
+/** Persistent token storage for the app's authenticated session. */
 object TokenStore {
     private const val PREFS_NAME = "sportakus_auth_tokens"
-    private const val JWT_KEY = "jwt"
+    private const val ACCESS_TOKEN_KEY = "access_token"
+    private const val REFRESH_TOKEN_KEY = "refresh_token"
 
-    fun saveJwt(context: Context, jwt: String) {
-        context.applicationContext
+    fun saveTokens(context: Context, accessToken: String, refreshToken: String?) {
+        val editor = context.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(JWT_KEY, jwt)
-            .apply()
+            .putString(ACCESS_TOKEN_KEY, accessToken)
+        if (refreshToken.isNullOrBlank()) editor.remove(REFRESH_TOKEN_KEY)
+        else editor.putString(REFRESH_TOKEN_KEY, refreshToken)
+        editor.apply()
     }
 
-    fun getJwt(context: Context): String? = context.applicationContext
+    fun getAccessToken(context: Context): String? = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .getString(JWT_KEY, null)
+        .getString(ACCESS_TOKEN_KEY, null)
+        // Migrate tokens created by versions that stored a single JWT.
+        ?: context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString("jwt", null)
 
-    /** Use this value as the Authorization header for protected requests. */
-    fun authorizationHeader(context: Context): String? = getJwt(context)?.let { "Bearer $it" }
+    fun getRefreshToken(context: Context): String? = context.applicationContext
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getString(REFRESH_TOKEN_KEY, null)
+
+    /** Backward-compatible alias used by UI code which decodes account claims. */
+    fun getJwt(context: Context): String? = getAccessToken(context)
+
+    fun saveJwt(context: Context, jwt: String) = saveTokens(context, jwt, null)
+
+    fun authorizationHeader(context: Context): String? = getAccessToken(context)?.let { "Bearer $it" }
 
     fun clear(context: Context) {
         context.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .remove(JWT_KEY)
+            .remove(ACCESS_TOKEN_KEY)
+            .remove(REFRESH_TOKEN_KEY)
+            .remove("jwt")
             .apply()
     }
 }
