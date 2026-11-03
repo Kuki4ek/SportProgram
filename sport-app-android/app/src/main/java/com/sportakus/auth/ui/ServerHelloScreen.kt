@@ -1,5 +1,8 @@
 package com.sportakus.auth.ui
 
+import com.sportakus.auth.ui.theme.sportakusTextColor
+import com.sportakus.auth.ui.theme.sportakusSecondaryTextColor
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,9 +39,6 @@ import com.sportakus.auth.data.token.TokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private val HelloBackground = Color(0xFF101510)
-private val HelloText = Color(0xFFF2F5EE)
-private val HelloMuted = Color(0xFFB8C5AE)
 private val HelloGreen = Color(0xFF7DBA00)
 
 /**
@@ -60,17 +61,33 @@ fun ServerHelloScreen(
         loading = true
         displayName = null
         errorMessage = null
-        val jwt = TokenStore.getJwt(context)
+        val jwt = TokenStore.getAccessToken(context)
+        val refreshToken = TokenStore.getRefreshToken(context)
         if (jwt.isNullOrBlank()) {
             errorMessage = "JWT не найден на устройстве. Сначала выполни вход или регистрацию."
             loading = false
         } else {
             val result = withContext(Dispatchers.IO) {
-                AuthApi.getCurrentUserName(baseUrl = baseUrl, jwt = jwt)
+                AuthApi.getCurrentUserName(baseUrl = baseUrl, jwt = jwt, storedRefreshToken = refreshToken)
             }
             when (result) {
-                is CurrentUserApiResult.Success -> displayName = result.displayName
-                is CurrentUserApiResult.Failure -> errorMessage = result.message
+                is CurrentUserApiResult.Success -> {
+                    if (!result.renewedAccessToken.isNullOrBlank()) {
+                        TokenStore.saveTokens(
+                            context,
+                            result.renewedAccessToken,
+                            result.renewedRefreshToken ?: refreshToken
+                        )
+                    }
+                    displayName = result.displayName
+                }
+                is CurrentUserApiResult.Failure -> {
+                    errorMessage = result.message
+                    if (result.httpStatus == 401) {
+                        TokenStore.clear(context)
+                        onBackToAuth()
+                    }
+                }
             }
             loading = false
         }
@@ -79,7 +96,7 @@ fun ServerHelloScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(HelloBackground)
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 28.dp),
@@ -88,7 +105,7 @@ fun ServerHelloScreen(
     ) {
         DarkText(
             text = "Тест авторизации",
-            color = HelloText,
+            color = sportakusTextColor(),
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
@@ -101,7 +118,7 @@ fun ServerHelloScreen(
                 Spacer(Modifier.height(16.dp))
                 DarkText(
                     text = "Получаем профиль пользователя с сервера…",
-                    color = HelloMuted,
+                    color = sportakusSecondaryTextColor(),
                     fontSize = 15.sp,
                     textAlign = TextAlign.Center
                 )
@@ -109,7 +126,7 @@ fun ServerHelloScreen(
             displayName != null -> {
                 DarkText(
                     text = "Привет, $displayName",
-                    color = HelloText,
+                    color = sportakusTextColor(),
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
@@ -117,7 +134,7 @@ fun ServerHelloScreen(
                 Spacer(Modifier.height(12.dp))
                 DarkText(
                     text = "Имя получено из GET /api/users/me с JWT в заголовке Authorization: Bearer.",
-                    color = HelloMuted,
+                    color = sportakusSecondaryTextColor(),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
                 )
@@ -125,7 +142,7 @@ fun ServerHelloScreen(
             else -> {
                 DarkText(
                     text = "JWT получен и сохранён.",
-                    color = HelloText,
+                    color = sportakusTextColor(),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
@@ -133,14 +150,14 @@ fun ServerHelloScreen(
                 Spacer(Modifier.height(12.dp))
                 DarkText(
                     text = "Не удалось получить имя пользователя с сервера.",
-                    color = HelloMuted,
+                    color = sportakusSecondaryTextColor(),
                     fontSize = 15.sp,
                     textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(8.dp))
                 DarkText(
                     text = errorMessage.orEmpty(),
-                    color = HelloText,
+                    color = sportakusTextColor(),
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
                 )
@@ -151,10 +168,10 @@ fun ServerHelloScreen(
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = HelloGreen,
-                        contentColor = Color(0xFF101510)
+                        contentColor = Color.Black
                     )
                 ) {
-                    DarkText("Повторить запрос", color = Color(0xFF101510), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    DarkText("Повторить запрос", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -164,9 +181,9 @@ fun ServerHelloScreen(
             onClick = onBackToAuth,
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = HelloText)
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = sportakusTextColor())
         ) {
-            DarkText("Вернуться к авторизации", color = HelloText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            DarkText("Вернуться к авторизации", color = sportakusTextColor(), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

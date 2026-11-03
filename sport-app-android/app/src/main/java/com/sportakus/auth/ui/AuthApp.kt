@@ -1,15 +1,22 @@
 package com.sportakus.auth.ui
 
+import com.sportakus.auth.ui.theme.sportakusTextColor
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.util.Base64
+import org.json.JSONObject
+import org.json.JSONArray
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -28,9 +35,14 @@ import androidx.compose.material3.TextButton
 import com.sportakus.auth.ui.theme.SportakusTheme
 import com.sportakus.auth.data.api.AuthApi
 import com.sportakus.auth.data.api.RegisterApiResult
+import com.sportakus.auth.data.api.EmailConfirmationApiResult
 import com.sportakus.auth.data.api.RegisterRequest
 import com.sportakus.auth.data.api.LoginApiRequest
 import com.sportakus.auth.data.api.LoginApiResult
+import com.sportakus.auth.data.api.PasswordRecoveryApiResult
+import com.sportakus.auth.data.api.AuthActionApiResult
+import com.sportakus.auth.data.api.UserProfile
+import com.sportakus.auth.data.api.CurrentUserApiResult
 import com.sportakus.auth.data.token.TokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,7 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 
-internal enum class AuthDestination {
+private enum class AuthDestination {
     SPLASH,
     SAFETY_NOTE,
     INTRO,
@@ -61,7 +73,11 @@ internal enum class AuthDestination {
     RESET_PASSWORD,
     SERVER_SETTINGS,
     GUEST_HOME,
-    SERVER_HELLO
+    SERVER_HELLO,
+    MAIN_APP,
+    WORKOUT_DETAIL,
+    ADMIN_LIST,
+    ADMIN_EDITOR
 }
 
 @Composable
@@ -75,6 +91,35 @@ fun AuthApp() {
     // is sent to the intro cards and questionnaire.
     var destination by remember { mutableStateOf(AuthDestination.SPLASH) }
     var serverSettingsReturn by remember { mutableStateOf(AuthDestination.AUTH_WELCOME) }
+    var currentUserName by rememberSaveable { mutableStateOf(preferences.getString("profile_display_name", "") ?: "") }
+    var currentProfile by remember { mutableStateOf(UserProfile()) }
+    var activeWorkoutTitle by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeWorkoutSeconds by rememberSaveable { mutableStateOf(0) }
+    var currentAccountKey by rememberSaveable {
+        mutableStateOf(preferences.getString("active_account_identity", "") ?: "")
+    }
+    var isGuestSession by rememberSaveable { mutableStateOf(false) }
+    val exerciseCatalog = remember(preferences) {
+        mutableStateListOf<WorkoutExercise>().apply {
+            val savedCatalogV3 = preferences.getString("local_exercise_catalog_v3_json", null)
+            val savedCatalogV2 = preferences.getString("local_exercise_catalog_v2_json", null)
+            val restored = (savedCatalogV3 ?: savedCatalogV2)?.let(::decodeWorkoutExercises)
+                ?.map { exercise ->
+                    // Normalize only the four built-in demo records; retain admin-created entries.
+                    if (exercise.id.startsWith("demo-")) {
+                        exercise.copy(durationMinutes = 0, distance = "—", calories = 0, coins = 0)
+                    } else exercise
+                }
+            addAll(restored?.takeIf { it.isNotEmpty() } ?: demoWorkoutExercises())
+        }
+    }
+    val persistExerciseCatalog: () -> Unit = {
+        preferences.edit()
+            .putString("local_exercise_catalog_v3_json", encodeWorkoutExercises(exerciseCatalog))
+            .apply()
+    }
+    var selectedExerciseId by rememberSaveable { mutableStateOf("") }
+    var editingExerciseId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Test server address is editable in the app and persisted across restarts.
     val defaultServerUrl = "http://10.0.2.2:5000"
@@ -85,12 +130,57 @@ fun AuthApp() {
         mutableStateOf(preferences.getString("api_base_url", defaultServerUrl) ?: defaultServerUrl)
     }
     var registrationSubmitting by remember { mutableStateOf(false) }
+    var registrationCodeRequesting by remember { mutableStateOf(false) }
     var loginSubmitting by remember { mutableStateOf(false) }
     var serverRegistrationFieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    // Shared UI message state must be declared before callbacks that capture it.
+    var notice by remember { mutableStateOf<String?>(null) }
 
-    // This edition is intentionally dark-only; no theme switch is exposed.
-    val activeDarkTheme = true
+    val loadCurrentProfile: () -> Unit = {
+        val accessToken = TokenStore.getAccessToken(context)
+        val refreshToken = TokenStore.getRefreshToken(context)
+        if (!accessToken.isNullOrBlank()) {
+            coroutineScope.launch {
+                when (val result = withContext(Dispatchers.IO) {
+                    AuthApi.getCurrentUserName(serverBaseUrl, accessToken, refreshToken)
+                }) {
+                    is CurrentUserApiResult.Success -> {
+                        currentProfile = result.profile
+                        currentUserName = result.profile.displayName
+                        if (!result.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refreshToken)
+                        }
+                        preferences.edit()
+                            .putString(profileDisplayNamePreferenceKey(currentAccountKey.ifBlank { "guest" }), currentUserName)
+                            .putString("profile_display_name", currentUserName)
+                            .apply()
+                    }
+                    is CurrentUserApiResult.Failure -> {
+                        // Do not manufacture profile data on API failure. Unknown fields stay blank/zero.
+                        currentProfile = currentProfile.copy(
+                            login = currentProfile.login.ifBlank { currentUserName }
+                        )
+                        notice = result.message
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(activeWorkoutTitle) {
+        if (activeWorkoutTitle.isNullOrBlank()) {
+            activeWorkoutSeconds = 0
+        } else {
+            while (true) {
+                delay(1_000)
+                activeWorkoutSeconds += 1
+            }
+        }
+    }
+
+    // V2 always uses the light palette; legacy dark-theme preferences are ignored.
+    val activeDarkTheme = false
 
     // Authentication form state.
     var loginIdentifier by rememberSaveable { mutableStateOf("") }
@@ -112,31 +202,73 @@ fun AuthApp() {
     var recoveryContact by rememberSaveable { mutableStateOf("") }
     var recoveryVerificationCode by rememberSaveable { mutableStateOf("") }
     var recoveryResendKey by rememberSaveable { mutableStateOf(0) }
+    var recoveryCodeToken by rememberSaveable { mutableStateOf("") }
+    var recoveryResetToken by rememberSaveable { mutableStateOf("") }
+    var recoverySubmitting by rememberSaveable { mutableStateOf(false) }
     var newPassword by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
-    var notice by remember { mutableStateOf<String?>(null) }
 
     // Questionnaire answers are retained locally while the user moves between steps.
-    var questionnaireReasons by rememberSaveable { mutableStateOf("Фитнес|Общение|Самостоятельность|Цель") }
-    var questionnaireHeight by rememberSaveable { mutableStateOf("170") }
-    var questionnaireWeight by rememberSaveable { mutableStateOf("65") }
-    var questionnaireGender by rememberSaveable { mutableStateOf("Мужчина") }
-    var birthDay by rememberSaveable { mutableStateOf("29") }
-    var birthMonth by rememberSaveable { mutableStateOf("Март") }
-    var birthYear by rememberSaveable { mutableStateOf("2003") }
-    var questionnaireIntensity by rememberSaveable { mutableStateOf("Практически не занимался(-ась)") }
-    var questionnaireRegularity by rememberSaveable { mutableStateOf("Не занимался(-ась) регулярно") }
-    var questionnaireVolume by rememberSaveable { mutableStateOf("До 5 минут") }
-    var questionnaireDays by rememberSaveable { mutableStateOf("3 дня в неделю") }
-    var questionnaireFormats by rememberSaveable { mutableStateOf("Без прыжков|Самостоятельно выбирать тип") }
-    var questionnaireGoals by rememberSaveable { mutableStateOf("Больше двигаться|Поддерживать регулярность занятий") }
-    var questionnaireMedical by rememberSaveable { mutableStateOf("Нет известных мне ограничений") }
+    // New accounts start with unanswered questionnaire fields; no sample personal data is preselected.
+    var questionnaireReasons by rememberSaveable { mutableStateOf("") }
+    var questionnaireHeight by rememberSaveable { mutableStateOf("") }
+    var questionnaireWeight by rememberSaveable { mutableStateOf("") }
+    var questionnaireGender by rememberSaveable { mutableStateOf("") }
+    var birthDay by rememberSaveable { mutableStateOf("") }
+    var birthMonth by rememberSaveable { mutableStateOf("") }
+    var birthYear by rememberSaveable { mutableStateOf("") }
+    var questionnaireIntensity by rememberSaveable { mutableStateOf("") }
+    var questionnaireRegularity by rememberSaveable { mutableStateOf("") }
+    var questionnaireVolume by rememberSaveable { mutableStateOf("") }
+    var questionnaireDays by rememberSaveable { mutableStateOf("") }
+    var questionnaireFormats by rememberSaveable { mutableStateOf("") }
+    var questionnaireGoals by rememberSaveable { mutableStateOf("") }
+    var questionnaireMedical by rememberSaveable { mutableStateOf("") }
 
-    // Kept as a no-op while the theme switch is intentionally disabled.
+    // Start a fresh questionnaire for a newly registered account. Completion is
+    // tracked per account, not globally on the device.
+    val resetQuestionnaireAnswers: () -> Unit = {
+        questionnaireReasons = ""
+        questionnaireHeight = ""
+        questionnaireWeight = ""
+        questionnaireGender = ""
+        birthDay = ""
+        birthMonth = ""
+        birthYear = ""
+        questionnaireIntensity = ""
+        questionnaireRegularity = ""
+        questionnaireVolume = ""
+        questionnaireDays = ""
+        questionnaireFormats = ""
+        questionnaireGoals = ""
+        questionnaireMedical = ""
+    }
+
+    // Kept as a no-op for compatibility with existing screen signatures.
     val toggleTheme: () -> Unit = {}
     val completeOnboarding: () -> Unit = {
-        preferences.edit().putBoolean("onboarding_completed", true).apply()
-        destination = AuthDestination.GUEST_HOME
+        val accountIdentity = currentAccountKey.ifBlank { "guest" }
+        val answerSuffix = accountPreferenceSuffix(accountIdentity)
+        preferences.edit()
+            .putBoolean(questionnaireCompletedPreferenceKey(accountIdentity), true)
+            // Kept for compatibility with older local builds; routing uses the scoped key above.
+            .putBoolean("questionnaire_completed", true)
+            .putString("questionnaire_${answerSuffix}_reasons", questionnaireReasons)
+            .putString("questionnaire_${answerSuffix}_height", questionnaireHeight)
+            .putString("questionnaire_${answerSuffix}_weight", questionnaireWeight)
+            .putString("questionnaire_${answerSuffix}_gender", questionnaireGender)
+            .putString("questionnaire_${answerSuffix}_birth_date", "$birthDay|$birthMonth|$birthYear")
+            .putString("questionnaire_${answerSuffix}_intensity", questionnaireIntensity)
+            .putString("questionnaire_${answerSuffix}_regularity", questionnaireRegularity)
+            .putString("questionnaire_${answerSuffix}_volume", questionnaireVolume)
+            .putString("questionnaire_${answerSuffix}_days", questionnaireDays)
+            .putString("questionnaire_${answerSuffix}_formats", questionnaireFormats)
+            .putString("questionnaire_${answerSuffix}_goals", questionnaireGoals)
+            .putString("questionnaire_${answerSuffix}_medical", questionnaireMedical)
+            .putString(profileDisplayNamePreferenceKey(accountIdentity), currentUserName)
+            .putString("profile_display_name", currentUserName)
+            .apply()
+        destination = AuthDestination.MAIN_APP
     }
 
     val navigateBack: () -> Unit = {
@@ -144,7 +276,7 @@ fun AuthApp() {
             AuthDestination.SPLASH -> AuthDestination.SPLASH
             AuthDestination.SAFETY_NOTE -> AuthDestination.SPLASH
             AuthDestination.INTRO -> AuthDestination.SAFETY_NOTE
-            AuthDestination.QUESTION_REASON -> AuthDestination.INTRO
+            AuthDestination.QUESTION_REASON -> AuthDestination.AUTH_WELCOME
             AuthDestination.QUESTION_BODY -> AuthDestination.QUESTION_REASON
             AuthDestination.QUESTION_BIRTH -> AuthDestination.QUESTION_BODY
             AuthDestination.QUESTION_INTENSITY -> AuthDestination.QUESTION_BIRTH
@@ -157,13 +289,17 @@ fun AuthApp() {
             AuthDestination.LOGIN -> AuthDestination.AUTH_WELCOME
             AuthDestination.REGISTER -> AuthDestination.AUTH_WELCOME
             AuthDestination.REGISTER_CONTACT -> AuthDestination.REGISTER
-            AuthDestination.REGISTRATION_VERIFY_CODE -> AuthDestination.REGISTER_CONTACT
+            AuthDestination.REGISTRATION_VERIFY_CODE -> AuthDestination.REGISTER
             AuthDestination.RECOVERY -> AuthDestination.LOGIN
             AuthDestination.RECOVERY_VERIFY_CODE -> AuthDestination.RECOVERY
             AuthDestination.RESET_PASSWORD -> AuthDestination.RECOVERY_VERIFY_CODE
             AuthDestination.SERVER_SETTINGS -> serverSettingsReturn
             AuthDestination.GUEST_HOME -> AuthDestination.AUTH_WELCOME
             AuthDestination.SERVER_HELLO -> AuthDestination.AUTH_WELCOME
+            AuthDestination.MAIN_APP -> AuthDestination.AUTH_WELCOME
+            AuthDestination.WORKOUT_DETAIL -> AuthDestination.MAIN_APP
+            AuthDestination.ADMIN_LIST -> AuthDestination.MAIN_APP
+            AuthDestination.ADMIN_EDITOR -> AuthDestination.ADMIN_LIST
         }
     }
 
@@ -174,48 +310,38 @@ fun AuthApp() {
         val phoneError = registrationPhoneError(registrationPhone)
         val passwordError = when {
             registrationPassword.isBlank() -> "Пароль обязателен"
-            registrationPassword.length < 8 -> "Длина пароля должна быть не менее 8 символов"
+            registrationPassword.length < 8 -> "Пароль должен содержать не менее 8 символов"
             else -> null
         }
         val locallyValid = loginError == null && emailError == null && phoneError == null && passwordError == null
 
+        // Step 1: validate locally and ask the server to send an email code.
+        // Account creation is intentionally deferred until the user submits that code.
         if (locallyValid && !registrationSubmitting) {
             serverRegistrationFieldErrors = emptyMap()
+            notice = null
             registrationSubmitting = true
             coroutineScope.launch {
                 val result = withContext(Dispatchers.IO) {
-                    AuthApi.register(
+                    AuthApi.requestEmailConfirmation(
                         baseUrl = serverBaseUrl,
-                        request = RegisterRequest(
-                            login = registrationLogin,
-                            email = registrationEmail,
-                            password = registrationPassword,
-                            phone = registrationPhone.takeIf { it.isNotBlank() }
-                        )
+                        login = registrationLogin,
+                        email = registrationEmail
                     )
                 }
                 registrationSubmitting = false
                 when (result) {
-                    is RegisterApiResult.Success -> {
-                        TokenStore.saveJwt(context, result.jwt)
-                        destination = AuthDestination.SERVER_HELLO
+                    is EmailConfirmationApiResult.Success -> {
+                        registrationVerificationCode = ""
+                        registrationResendKey += 1
+                        registrationContactMethod = "Почта"
+                        registrationContact = registrationEmail
+                        destination = AuthDestination.REGISTRATION_VERIFY_CODE
                         notice = null
                     }
-                    is RegisterApiResult.Failure -> {
-                        val mapped = linkedMapOf<String, String>()
-                        result.fieldErrors.forEach { (key, messages) ->
-                            val normalizedKey = when (key.lowercase()) {
-                                "username", "login" -> "login"
-                                "email" -> "email"
-                                "password" -> "password"
-                                "phone" -> "phone"
-                                else -> key.lowercase()
-                            }
-                            mapped[normalizedKey] = messages.joinToString("\n")
-                        }
-                        serverRegistrationFieldErrors = mapped
-                        if (mapped.isEmpty()) notice = result.message
-                        else notice = null
+                    is EmailConfirmationApiResult.Failure -> {
+                        serverRegistrationFieldErrors = mapRegistrationFieldErrors(result.fieldErrors)
+                        notice = result.message
                     }
                 }
             }
@@ -235,8 +361,10 @@ fun AuthApp() {
                     val result = withContext(Dispatchers.IO) {
                         AuthApi.login(
                             baseUrl = serverBaseUrl,
-                            request = LoginApiRequest(
-                                identifier = loginIdentifier,
+                            credentials = LoginApiRequest(
+                                identifier = if (!loginIdentifier.contains('@') && loginIdentifier.all { it.isDigit() || it in "+ ()-" }) {
+                                    formatPhoneForRegistrationApi(loginIdentifier) ?: loginIdentifier
+                                } else loginIdentifier,
                                 password = loginPassword
                             )
                         )
@@ -244,8 +372,27 @@ fun AuthApp() {
                     loginSubmitting = false
                     when (result) {
                         is LoginApiResult.Success -> {
-                            TokenStore.saveJwt(context, result.jwt)
-                            destination = AuthDestination.SERVER_HELLO
+                            TokenStore.saveTokens(context, result.jwt, result.refreshToken)
+                            isGuestSession = false
+                            val tokenIdentity = jwtAccountIdentity(result.jwt, loginIdentifier)
+                            currentAccountKey = preferences.getString(accountAliasPreferenceKey(loginIdentifier), null)
+                                ?: tokenIdentity
+                            preferences.edit().putString("active_account_identity", currentAccountKey).apply()
+                            currentUserName = loginIdentifier.substringBefore('@').ifBlank { "Спортсмен" }
+                            currentProfile = UserProfile(
+                                login = if (loginIdentifier.contains('@')) "" else loginIdentifier,
+                                email = loginIdentifier.takeIf { it.contains('@') }.orEmpty()
+                            )
+                            loadCurrentProfile()
+                            val questionnaireDone = preferences.getBoolean(
+                                questionnaireCompletedPreferenceKey(currentAccountKey), false
+                            )
+                            destination = if (questionnaireDone) {
+                                AuthDestination.MAIN_APP
+                            } else {
+                                resetQuestionnaireAnswers()
+                                AuthDestination.QUESTION_REASON
+                            }
                             notice = null
                         }
                         is LoginApiResult.Failure -> {
@@ -263,7 +410,7 @@ fun AuthApp() {
 
     LaunchedEffect(destination) {
         if (destination == AuthDestination.SPLASH) {
-            // Every app launch begins in the fixed dark theme.
+            // Every app launch begins with the persisted theme selection.
             delay(1200)
             if (destination == AuthDestination.SPLASH) {
                 destination = if (preferences.getBoolean("safety_note_seen", false)) {
@@ -275,24 +422,31 @@ fun AuthApp() {
         }
     }
 
-    SportakusTheme {
+    SportakusTheme(darkTheme = activeDarkTheme) {
         val view = LocalView.current
         val colors = MaterialTheme.colorScheme
         androidx.compose.runtime.SideEffect {
             view.context.findActivity()?.window?.let { window ->
-                val barColor = if (destination == AuthDestination.SPLASH) android.graphics.Color.rgb(125, 186, 0) else colors.background.toArgb()
+                val barColor = if (destination == AuthDestination.SPLASH) android.graphics.Color.rgb(121, 181, 5) else colors.background.toArgb()
                 window.statusBarColor = barColor
                 window.navigationBarColor = barColor
                 WindowCompat.getInsetsController(window, view).apply {
-                    isAppearanceLightStatusBars = !activeDarkTheme && destination != AuthDestination.SPLASH
-                    isAppearanceLightNavigationBars = !activeDarkTheme && destination != AuthDestination.SPLASH
+                    isAppearanceLightStatusBars = destination != AuthDestination.SPLASH
+                    isAppearanceLightNavigationBars = destination != AuthDestination.SPLASH
                 }
             }
         }
 
-        Surface(modifier = Modifier.fillMaxSize(), color = colors.background, contentColor = Color(0xFFF2F5EE)) {
-            Box(Modifier.fillMaxSize().imePadding()) {
-                when (destination) {
+        // Recreate screen-local remembered components when route or theme changes.
+        // Form data lives in AuthApp state, so credentials and questionnaire answers persist.
+        key(destination, activeDarkTheme) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = colors.background,
+                contentColor = sportakusTextColor()
+            ) {
+                Box(Modifier.fillMaxSize().imePadding()) {
+                    when (destination) {
                         AuthDestination.SPLASH -> SplashScreen()
 
                         AuthDestination.SAFETY_NOTE -> SafetyNoteScreen(darkTheme = activeDarkTheme) {
@@ -435,7 +589,15 @@ fun AuthApp() {
                                 destination = AuthDestination.REGISTER
                             },
                             onLogin = { destination = AuthDestination.LOGIN },
-                            onGuest = { destination = AuthDestination.INTRO },
+                            onGuest = {
+                                isGuestSession = true
+                                currentAccountKey = "guest"
+                                currentUserName = "Гость"
+                                currentProfile = UserProfile()
+                                activeWorkoutTitle = null
+                                activeWorkoutSeconds = 0
+                                destination = AuthDestination.MAIN_APP
+                            },
                             onProvider = { provider -> notice = "Регистрация через $provider пока не подключена к серверу." },
                             serverBaseUrl = serverBaseUrl,
                             onServerSettings = {
@@ -496,7 +658,7 @@ fun AuthApp() {
                             passwordError = serverRegistrationFieldErrors["password"] ?: if (registrationPasswordTouched || registrationAttempted) {
                                 when {
                                     registrationPassword.isBlank() -> "Пароль обязателен"
-                                    registrationPassword.length < 8 -> "Длина пароля должна быть не менее 8 символов"
+                                    registrationPassword.length < 8 -> "Пароль должен содержать не менее 8 символов"
                                     else -> null
                                 }
                             } else null,
@@ -527,7 +689,7 @@ fun AuthApp() {
                             onSendCode = {
                                 val valid = if (registrationContactMethod == "Почта") registrationEmailError(registrationContact) == null else registrationPhoneError(registrationContact) == null && registrationContact.isNotBlank()
                                 if (!valid) {
-                                    notice = if (registrationContactMethod == "Почта") "Введите корректный адрес почты." else "Введите телефон в формате +X (XXX) XXX-XX-XX."
+                                    notice = if (registrationContactMethod == "Почта") "Введите корректный адрес почты." else "Введите корректный номер с международным кодом страны."
                                 } else {
                                     registrationVerificationCode = ""
                                     registrationResendKey += 1
@@ -537,22 +699,111 @@ fun AuthApp() {
                         )
 
                         AuthDestination.REGISTRATION_VERIFY_CODE -> CodeConfirmationScreen(
-                            title = "Подтвердите аккаунт",
-                            description = "Пожалуйста, введите код, который был отправлен на\n${registrationContact.ifBlank { registrationEmail }}",
+                            title = "Подтверждение почты",
+                            description = "Мы отправили шестизначный код подтверждения на\n${registrationEmail}",
                             code = registrationVerificationCode,
                             onCodeChange = { registrationVerificationCode = it },
                             darkTheme = activeDarkTheme,
                             onToggleTheme = toggleTheme,
                             resendResetKey = registrationResendKey,
-                            onResend = { registrationResendKey += 1; registrationVerificationCode = "" },
-                            onBack = { destination = AuthDestination.REGISTER_CONTACT },
+                            isSubmitting = registrationSubmitting,
+                            isResending = registrationCodeRequesting,
+                            onResend = {
+                                if (!registrationCodeRequesting && !registrationSubmitting) {
+                                    registrationCodeRequesting = true
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            AuthApi.requestEmailConfirmation(
+                                                baseUrl = serverBaseUrl,
+                                                login = registrationLogin,
+                                                email = registrationEmail
+                                            )
+                                        }
+                                        registrationCodeRequesting = false
+                                        when (result) {
+                                            is EmailConfirmationApiResult.Success -> {
+                                                registrationVerificationCode = ""
+                                                registrationResendKey += 1
+                                                notice = null
+                                            }
+                                            is EmailConfirmationApiResult.Failure -> {
+                                                notice = result.message
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onBack = {
+                                registrationVerificationCode = ""
+                                destination = AuthDestination.REGISTER
+                            },
                             onConfirm = {
-                                if (registrationVerificationCode.length < 4) notice = "Введите код подтверждения."
-                                else {
-                                    loginIdentifier = registrationContact
-                                    loginPassword = ""
-                                    destination = AuthDestination.LOGIN
-                                    notice = "Экран регистрации пройден в демонстрационном режиме. Серверная проверка кода пока не подключена."
+                                when {
+                                    registrationVerificationCode.length != 6 -> notice = "Введите все 6 цифр кода из письма."
+                                    registrationSubmitting || registrationCodeRequesting -> Unit
+                                    else -> {
+                                        notice = null
+                                        registrationSubmitting = true
+                                        coroutineScope.launch {
+                                            val result = withContext(Dispatchers.IO) {
+                                                AuthApi.register(
+                                                    baseUrl = serverBaseUrl,
+                                                    registration = RegisterRequest(
+                                                        login = registrationLogin,
+                                                        email = registrationEmail,
+                                                        password = registrationPassword,
+                                                        emailCode = registrationVerificationCode,
+                                                        phone = registrationPhone.takeIf { it.isNotBlank() }
+                                                            ?.let { formatPhoneForRegistrationApi(it) }
+                                                    )
+                                                )
+                                            }
+                                            registrationSubmitting = false
+                                            when (result) {
+                                                is RegisterApiResult.Success -> {
+                                                    TokenStore.saveTokens(context, result.jwt, result.refreshToken)
+                                                    isGuestSession = false
+                                                    currentAccountKey = jwtAccountIdentity(result.jwt, registrationEmail)
+                                                    currentUserName = registrationLogin.trim().ifBlank { "Спортсмен" }
+                                                    currentProfile = UserProfile(
+                                                        login = registrationLogin.trim(),
+                                                        email = registrationEmail.trim(),
+                                                        phone = registrationPhone.takeIf { it.isNotBlank() }?.let { formatPhoneForRegistrationApi(it).orEmpty() }.orEmpty()
+                                                    )
+                                                    loadCurrentProfile()
+                                                    preferences.edit()
+                                                        .putString("active_account_identity", currentAccountKey)
+                                                        .putString(profileDisplayNamePreferenceKey(currentAccountKey), currentUserName)
+                                                        .putString(accountAliasPreferenceKey(registrationLogin), currentAccountKey)
+                                                        .putString(accountAliasPreferenceKey(registrationEmail), currentAccountKey)
+                                                        .putString(accountAliasPreferenceKey(registrationPhone), currentAccountKey)
+                                                        .putString("profile_display_name", currentUserName)
+                                                        .apply()
+                                                    val questionnaireDone = preferences.getBoolean(
+                                                        questionnaireCompletedPreferenceKey(currentAccountKey), false
+                                                    )
+                                                    destination = if (questionnaireDone) {
+                                                        AuthDestination.MAIN_APP
+                                                    } else {
+                                                        resetQuestionnaireAnswers()
+                                                        AuthDestination.QUESTION_REASON
+                                                    }
+                                                    notice = null
+                                                }
+                                                is RegisterApiResult.Failure -> {
+                                                    val mappedErrors = mapRegistrationFieldErrors(result.fieldErrors)
+                                                    serverRegistrationFieldErrors = mappedErrors
+                                                    val details = result.fieldErrors.values.flatten().distinct().joinToString("\n")
+                                                    notice = if (details.isBlank()) result.message else "${result.message}\n$details"
+                                                    // Field errors that require editing the form should return the user there;
+                                                    // code-related errors keep the user on the confirmation screen.
+                                                    if (mappedErrors.keys.any { it !in setOf("code", "emailcode") }) {
+                                                        destination = AuthDestination.REGISTER
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -566,31 +817,119 @@ fun AuthApp() {
                             onToggleTheme = toggleTheme,
                             onBack = { destination = AuthDestination.LOGIN },
                             onSendCode = {
-                                val valid = if (recoveryMethod == "Почта") registrationEmailError(recoveryContact) == null else recoveryContact.count(Char::isDigit) >= 7
-                                if (!valid) notice = if (recoveryMethod == "Почта") "Введите корректный адрес почты." else "Введите корректный номер телефона."
-                                else {
-                                    recoveryVerificationCode = ""
-                                    recoveryResendKey += 1
-                                    destination = AuthDestination.RECOVERY_VERIFY_CODE
+                                val kind = when (recoveryMethod) {
+                                    "Почта" -> "email"
+                                    "Телефон" -> "phone"
+                                    else -> "nickname"
+                                }
+                                val locallyValid = when (kind) {
+                                    "email" -> registrationEmailError(recoveryContact) == null
+                                    "phone" -> recoveryContact.isNotBlank() && isCompleteInternationalPhone(recoveryContact)
+                                    else -> recoveryContact.isNotBlank()
+                                }
+                                if (!locallyValid) {
+                                    notice = when (kind) {
+                                        "email" -> "Введите корректный адрес почты."
+                                        "phone" -> "Введите корректный номер с международным кодом страны."
+                                        else -> "Введите имя пользователя."
+                                    }
+                                } else if (!recoverySubmitting) {
+                                    recoverySubmitting = true
+                                    notice = null
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            AuthApi.requestPasswordReset(
+                                                baseUrl = serverBaseUrl,
+                                                contactKind = kind,
+                                                identifier = if (kind == "phone") {
+                                                    formatPhoneForRegistrationApi(recoveryContact) ?: recoveryContact
+                                                } else recoveryContact.trim()
+                                            )
+                                        }
+                                        recoverySubmitting = false
+                                        when (result) {
+                                            is PasswordRecoveryApiResult.Success -> {
+                                                if (result.codeToken.isNullOrBlank()) {
+                                                    notice = "Сервер отправил ответ без code_token. Проверь контракт forgot-password/request."
+                                                } else {
+                                                    recoveryCodeToken = result.codeToken
+                                                    recoveryResetToken = ""
+                                                    recoveryVerificationCode = ""
+                                                    recoveryResendKey += 1
+                                                    destination = AuthDestination.RECOVERY_VERIFY_CODE
+                                                }
+                                            }
+                                            is PasswordRecoveryApiResult.Failure -> notice = result.message
+                                        }
+                                    }
                                 }
                             }
                         )
 
                         AuthDestination.RECOVERY_VERIFY_CODE -> CodeConfirmationScreen(
                             title = "Восстановление пароля",
-                            description = "Введите код подтверждения, отправленный на\n$recoveryContact",
+                            description = "Введите код подтверждения, отправленный на\n${if (recoveryMethod == "Телефон") formatInternationalPhone(recoveryContact) else recoveryContact}",
                             code = recoveryVerificationCode,
-                            onCodeChange = { recoveryVerificationCode = it },
+                            onCodeChange = { recoveryVerificationCode = it.filter(Char::isDigit).take(8) },
                             darkTheme = activeDarkTheme,
                             onToggleTheme = toggleTheme,
                             resendResetKey = recoveryResendKey,
-                            onResend = { recoveryResendKey += 1; recoveryVerificationCode = "" },
+                            isSubmitting = recoverySubmitting,
+                            onResend = {
+                                if (!recoverySubmitting) {
+                                    recoverySubmitting = true
+                                    coroutineScope.launch {
+                                        val kind = when (recoveryMethod) {
+                                            "Почта" -> "email"
+                                            "Телефон" -> "phone"
+                                            else -> "nickname"
+                                        }
+                                        val resendResult = withContext(Dispatchers.IO) {
+                                            AuthApi.requestPasswordReset(
+                                                baseUrl = serverBaseUrl,
+                                                contactKind = kind,
+                                                identifier = if (kind == "phone") formatPhoneForRegistrationApi(recoveryContact) ?: recoveryContact else recoveryContact.trim()
+                                            )
+                                        }
+                                        recoverySubmitting = false
+                                        when (resendResult) {
+                                            is PasswordRecoveryApiResult.Success -> {
+                                                if (!resendResult.codeToken.isNullOrBlank()) {
+                                                    recoveryCodeToken = resendResult.codeToken
+                                                    recoveryVerificationCode = ""
+                                                    recoveryResendKey += 1
+                                                    notice = null
+                                                } else notice = "Сервер не вернул code_token для повторной отправки."
+                                            }
+                                            is PasswordRecoveryApiResult.Failure -> notice = resendResult.message
+                                        }
+                                    }
+                                }
+                            },
                             onBack = { destination = AuthDestination.RECOVERY },
                             onConfirm = {
-                                if (recoveryVerificationCode.length < 4) notice = "Введите код подтверждения."
-                                else {
-                                    destination = AuthDestination.RESET_PASSWORD
-                                    notice = "Проверка кода пока демонстрационная: подключение к API восстановления пароля ещё не настроено."
+                                if (recoveryVerificationCode.length != 6) {
+                                    notice = "Введите все 6 цифр кода подтверждения."
+                                } else if (!recoverySubmitting) {
+                                    recoverySubmitting = true
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            AuthApi.verifyPasswordResetCode(
+                                                baseUrl = serverBaseUrl,
+                                                codeToken = recoveryCodeToken,
+                                                verifyCode = recoveryVerificationCode
+                                            )
+                                        }
+                                        recoverySubmitting = false
+                                        when (result) {
+                                            is PasswordRecoveryApiResult.Success -> {
+                                                recoveryResetToken = result.resetToken.orEmpty()
+                                                destination = AuthDestination.RESET_PASSWORD
+                                                notice = null
+                                            }
+                                            is PasswordRecoveryApiResult.Failure -> notice = result.message
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -608,18 +947,42 @@ fun AuthApp() {
                                     newPassword.isBlank() -> notice = "Введите новый пароль."
                                     newPassword.length < 8 -> Unit
                                     newPassword != confirmPassword -> notice = "Пароли не совпадают."
+                                    recoverySubmitting -> Unit
                                     else -> {
-                                        destination = AuthDestination.LOGIN
-                                        loginPassword = ""
-                                        newPassword = ""
-                                        confirmPassword = ""
-                                        notice = "Форма готова, но запрос сброса пароля ещё не подключён к C# API."
+                                        recoverySubmitting = true
+                                        notice = null
+                                        coroutineScope.launch {
+                                            val result = withContext(Dispatchers.IO) {
+                                                AuthApi.resetPassword(
+                                                    baseUrl = serverBaseUrl,
+                                                    codeToken = recoveryCodeToken,
+                                                    verifyCode = recoveryVerificationCode,
+                                                    newPassword = newPassword,
+                                                    resetToken = recoveryResetToken.takeIf { it.isNotBlank() }
+                                                )
+                                            }
+                                            recoverySubmitting = false
+                                            when (result) {
+                                                is AuthActionApiResult.Success -> {
+                                                    destination = AuthDestination.LOGIN
+                                                    loginPassword = ""
+                                                    newPassword = ""
+                                                    confirmPassword = ""
+                                                    recoveryCodeToken = ""
+                                                    recoveryResetToken = ""
+                                                    recoveryVerificationCode = ""
+                                                    notice = "Пароль успешно изменён. Теперь войдите с новым паролем."
+                                                }
+                                                is AuthActionApiResult.Failure -> notice = result.message
+                                            }
+                                        }
                                     }
                                 }
                             }
                         )
 
                         AuthDestination.SERVER_SETTINGS -> ServerSettingsScreen(
+                            darkTheme = activeDarkTheme,
                             baseUrl = serverUrlDraft,
                             onBaseUrlChange = { serverUrlDraft = it },
                             onBack = { destination = serverSettingsReturn },
@@ -641,6 +1004,121 @@ fun AuthApp() {
                             onBackToAuth = { destination = AuthDestination.AUTH_WELCOME }
                         )
 
+                        AuthDestination.MAIN_APP -> MainAppScreen(
+                            username = currentUserName,
+                            profile = currentProfile,
+                            exercises = exerciseCatalog.toList(),
+                            activeWorkoutTitle = activeWorkoutTitle,
+                            activeWorkoutSeconds = activeWorkoutSeconds,
+                            onFinishWorkout = {
+                                activeWorkoutTitle = null
+                                activeWorkoutSeconds = 0
+                            },
+                            isAdmin = com.sportakus.auth.BuildConfig.DEBUG || jwtHasAdminRole(TokenStore.getJwt(context)),
+                            onOpenExercise = { id ->
+                                selectedExerciseId = id
+                                destination = AuthDestination.WORKOUT_DETAIL
+                            },
+                            onOpenAdmin = { destination = AuthDestination.ADMIN_LIST },
+                            onLogout = {
+                                val accessToken = TokenStore.getAccessToken(context)
+                                val refreshToken = TokenStore.getRefreshToken(context)
+                                coroutineScope.launch {
+                                    if (!accessToken.isNullOrBlank()) {
+                                        withContext(Dispatchers.IO) {
+                                            AuthApi.logout(serverBaseUrl, accessToken, refreshToken)
+                                        }
+                                    }
+                                    TokenStore.clear(context)
+                                    isGuestSession = false
+                                    currentAccountKey = ""
+                                    currentProfile = UserProfile()
+                                    currentUserName = ""
+                                    activeWorkoutTitle = null
+                                    activeWorkoutSeconds = 0
+                                    preferences.edit().remove("active_account_identity").apply()
+                                    destination = AuthDestination.AUTH_WELCOME
+                                }
+                            },
+                            onProfileSave = { updatedProfile, onCompleted ->
+                                val accessToken = TokenStore.getAccessToken(context)
+                                if (accessToken.isNullOrBlank()) {
+                                    notice = "Для сохранения профиля необходимо войти в аккаунт."
+                                    onCompleted(false)
+                                } else {
+                                    coroutineScope.launch {
+                                        when (val result = withContext(Dispatchers.IO) {
+                                            AuthApi.updateCurrentUserProfile(serverBaseUrl, accessToken, updatedProfile, TokenStore.getRefreshToken(context))
+                                        }) {
+                                            is AuthActionApiResult.Success -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: TokenStore.getRefreshToken(context))
+                                                }
+                                                currentProfile = updatedProfile
+                                                currentUserName = updatedProfile.displayName
+                                                preferences.edit()
+                                                    .putString(profileDisplayNamePreferenceKey(currentAccountKey.ifBlank { "guest" }), currentUserName)
+                                                    .putString("profile_display_name", currentUserName)
+                                                    .apply()
+                                                onCompleted(true)
+                                            }
+                                            is AuthActionApiResult.Failure -> {
+                                                notice = result.message
+                                                onCompleted(false)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        )
+
+                        AuthDestination.WORKOUT_DETAIL -> {
+                            val exercise = exerciseCatalog.firstOrNull { it.id == selectedExerciseId }
+                            if (exercise == null) {
+                                destination = AuthDestination.MAIN_APP
+                            } else {
+                                WorkoutDetailScreen(
+                                    exercise = exercise,
+                                    onBack = { destination = AuthDestination.MAIN_APP },
+                                    onStart = {
+                                        activeWorkoutTitle = exercise.title
+                                        activeWorkoutSeconds = 0
+                                        destination = AuthDestination.MAIN_APP
+                                    }
+                                )
+                            }
+                        }
+
+                        AuthDestination.ADMIN_LIST -> AdminExerciseListScreen(
+                            exercises = exerciseCatalog.toList(),
+                            onBack = { destination = AuthDestination.MAIN_APP },
+                            onAdd = { editingExerciseId = null; destination = AuthDestination.ADMIN_EDITOR },
+                            onEdit = { id -> editingExerciseId = id; destination = AuthDestination.ADMIN_EDITOR },
+                            onToggleVisibility = { id ->
+                                val index = exerciseCatalog.indexOfFirst { it.id == id }
+                                if (index >= 0) {
+                                    exerciseCatalog[index] = exerciseCatalog[index].copy(published = !exerciseCatalog[index].published)
+                                    persistExerciseCatalog()
+                                }
+                            },
+                            onDelete = { id ->
+                                exerciseCatalog.removeAll { it.id == id }
+                                persistExerciseCatalog()
+                            }
+                        )
+
+                        AuthDestination.ADMIN_EDITOR -> AdminExerciseEditorScreen(
+                            initial = editingExerciseId?.let { id -> exerciseCatalog.firstOrNull { it.id == id } },
+                            onCancel = { destination = AuthDestination.ADMIN_LIST },
+                            onSave = { updated ->
+                                val index = exerciseCatalog.indexOfFirst { it.id == updated.id }
+                                if (index >= 0) exerciseCatalog[index] = updated else exerciseCatalog.add(0, updated)
+                                persistExerciseCatalog()
+                                destination = AuthDestination.ADMIN_LIST
+                                notice = if (editingExerciseId == null) "Упражнение добавлено в локальный список предпросмотра." else "Изменения сохранены в локальном списке предпросмотра."
+                            }
+                        )
+
                         AuthDestination.SERVER_HELLO -> ServerHelloScreen(
                             baseUrl = serverBaseUrl,
                             onBackToAuth = { destination = AuthDestination.AUTH_WELCOME }
@@ -650,22 +1128,141 @@ fun AuthApp() {
                 notice?.let { message ->
                     AlertDialog(
                         onDismissRequest = { notice = null },
-                        title = { DarkText("Спортакус", color = Color(0xFFF2F5EE)) },
-                        text = { DarkText(message, color = Color(0xFFF2F5EE)) },
+                        title = { DarkText("Спортакус", color = sportakusTextColor()) },
+                        text = { DarkText(message, color = sportakusTextColor()) },
                         confirmButton = {
-                            TextButton(onClick = { notice = null }) { DarkText("Понятно", color = Color(0xFFF2F5EE)) }
+                            TextButton(onClick = { notice = null }) { DarkText("Понятно", color = sportakusTextColor()) }
                         },
                         containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = Color(0xFFF2F5EE),
-                        textContentColor = Color(0xFFF2F5EE)
+                        titleContentColor = sportakusTextColor(),
+                        textContentColor = sportakusTextColor()
                     )
+                }
                 }
             }
         }
     }
 }
 
-internal fun normalizeBaseUrl(raw: String): String? {
+private fun accountPreferenceSuffix(identity: String): String {
+    val normalized = identity.trim().lowercase().ifBlank { "guest" }
+    return Base64.encodeToString(
+        normalized.toByteArray(Charsets.UTF_8),
+        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+    )
+}
+
+private fun questionnaireCompletedPreferenceKey(identity: String): String =
+    "questionnaire_completed_${accountPreferenceSuffix(identity)}"
+
+private fun profileDisplayNamePreferenceKey(identity: String): String =
+    "profile_display_name_${accountPreferenceSuffix(identity)}"
+
+private fun accountAliasPreferenceKey(identifier: String): String =
+    "account_identity_alias_${accountPreferenceSuffix(identifier)}"
+
+/** Prefer a stable server identity claim; fall back to the login/email entered by the user. */
+private fun jwtAccountIdentity(token: String?, fallback: String): String {
+    if (!token.isNullOrBlank()) {
+        try {
+            val parts = token.split('.')
+            if (parts.size >= 2) {
+                val payloadBytes = Base64.decode(
+                    parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+                )
+                val payload = JSONObject(String(payloadBytes, Charsets.UTF_8))
+                val allKeys = mutableListOf<String>()
+                val iterator = payload.keys()
+                while (iterator.hasNext()) allKeys += iterator.next()
+                val preferred = listOf("email", "sub", "nameidentifier", "preferred_username", "unique_name")
+                for (claim in preferred) {
+                    val key = allKeys.firstOrNull {
+                        it.equals(claim, ignoreCase = true) || it.endsWith("/$claim", ignoreCase = true)
+                    } ?: if (claim == "nameidentifier") allKeys.firstOrNull {
+                        it.contains("nameidentifier", ignoreCase = true)
+                    } else null
+                    if (key != null) {
+                        val value = payload.optString(key).trim()
+                        if (value.isNotBlank() && !value.equals("null", ignoreCase = true)) {
+                            return value.lowercase()
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Invalid or opaque token: use the user-entered identifier below.
+        }
+    }
+    return fallback.trim().lowercase().ifBlank { "guest" }
+}
+
+private fun encodeWorkoutExercises(exercises: List<WorkoutExercise>): String {
+    val json = JSONArray()
+    exercises.forEach { exercise ->
+        json.put(
+            JSONObject()
+                .put("id", exercise.id)
+                .put("title", exercise.title)
+                .put("shortDescription", exercise.shortDescription)
+                .put("description", exercise.description)
+                .put("durationMinutes", exercise.durationMinutes)
+                .put("distance", exercise.distance)
+                .put("calories", exercise.calories)
+                .put("coins", exercise.coins)
+                .put("contraindications", exercise.contraindications)
+                .put("tips", exercise.tips)
+                .put("steps", exercise.steps)
+                .put("published", exercise.published)
+                .put("intensity", exercise.intensity)
+                .put("category", exercise.category)
+        )
+    }
+    return json.toString()
+}
+
+private fun decodeWorkoutExercises(raw: String): List<WorkoutExercise>? = try {
+    val json = JSONArray(raw)
+    buildList {
+        for (index in 0 until json.length()) {
+            val item = json.optJSONObject(index) ?: continue
+            add(
+                WorkoutExercise(
+                    id = item.optString("id").ifBlank { "local-$index" },
+                    title = item.optString("title"),
+                    shortDescription = item.optString("shortDescription"),
+                    description = item.optString("description"),
+                    durationMinutes = item.optInt("durationMinutes", 0),
+                    distance = item.optString("distance", "—"),
+                    calories = item.optInt("calories", 0),
+                    coins = item.optInt("coins", 0),
+                    contraindications = item.optString("contraindications"),
+                    tips = item.optString("tips"),
+                    steps = item.optString("steps"),
+                    published = item.optBoolean("published", false),
+                    intensity = item.optString("intensity", ""),
+                    category = item.optString("category", "Другое")
+                )
+            )
+        }
+    }
+} catch (_: Exception) {
+    null
+}
+
+private fun mapRegistrationFieldErrors(errors: Map<String, List<String>>): Map<String, String> =
+    errors.entries.associate { (key, messages) ->
+        val normalizedKey = when (key.lowercase()) {
+            "username", "login" -> "login"
+            "email", "mail" -> "email"
+            "password" -> "password"
+            "phone", "phonenumber", "phone_number" -> "phone"
+            "code", "emailcode", "email_code", "confirmcode", "confirmationcode", "verificationcode" -> "code"
+            else -> key.lowercase()
+        }
+        normalizedKey to messages.joinToString("\n")
+    }
+
+private fun normalizeBaseUrl(raw: String): String? {
     val value = raw.trim().trimEnd('/')
     if (!value.startsWith("http://", ignoreCase = true) && !value.startsWith("https://", ignoreCase = true)) return null
     val uri = android.net.Uri.parse(value)
@@ -675,10 +1272,10 @@ internal fun normalizeBaseUrl(raw: String): String? {
 }
 
 /** Client-side checks mirror the rules described by the C# registration endpoint. */
-internal fun registrationUsernameError(value: String): String? =
+private fun registrationUsernameError(value: String): String? =
     if (value.isBlank()) "Имя пользователя обязательно" else null
 
-internal fun registrationEmailError(value: String): String? {
+private fun registrationEmailError(value: String): String? {
     if (value.isBlank()) return "Почта обязательна"
     val atIndex = value.lastIndexOf('@')
     val dotIndex = value.lastIndexOf('.')
@@ -687,10 +1284,48 @@ internal fun registrationEmailError(value: String): String? {
     return if (valid) null else "Почта должна быть вида example@example.ru"
 }
 
-internal fun registrationPhoneError(value: String): String? {
-    if (value.isEmpty()) return null
-    val pattern = Regex("^\\+\\d{1,4} \\(\\d{3}\\) \\d{3}-\\d{2}-\\d{2}$")
-    return if (pattern.matches(value)) null else "Телефон должен быть вида +X (XXX) XXX-XX-XX"
+private fun registrationPhoneError(value: String): String? {
+    if (value.isBlank()) return null
+    return if (isCompleteInternationalPhone(value)) null else "Введите корректный номер с международным кодом страны."
+}
+
+/** Read standard ASP.NET/JWT role claim variants. UI visibility is not an authorization boundary. */
+private fun jwtHasAdminRole(token: String?): Boolean {
+    if (token.isNullOrBlank()) return false
+    return try {
+        val parts = token.split('.')
+        if (parts.size < 2) return false
+        val payloadBytes = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+        val payload = JSONObject(String(payloadBytes, Charsets.UTF_8))
+        val keys = payload.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val normalized = key.lowercase()
+            val value = payload.opt(key)
+            if (normalized.contains("role") && valueContainsAdmin(value)) return true
+            if ((normalized == "isadmin" || normalized == "is_admin") && value == true) return true
+        }
+        false
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun valueContainsAdmin(value: Any?): Boolean = when (value) {
+    is String -> value.split(',', ';', ' ').any { it.equals("admin", ignoreCase = true) }
+    is org.json.JSONArray -> (0 until value.length()).any { valueContainsAdmin(value.opt(it)) }
+    is JSONObject -> {
+        val keys = value.keys()
+        var found = false
+        while (keys.hasNext() && !found) {
+            val key = keys.next()
+            if (key.contains("role", ignoreCase = true) || key.equals("name", ignoreCase = true)) {
+                found = valueContainsAdmin(value.opt(key))
+            }
+        }
+        found
+    }
+    else -> false
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
