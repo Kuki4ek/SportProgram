@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SportakusAuth"
+rootProject.name = "SportakusAuthV2"
 include(":app")
