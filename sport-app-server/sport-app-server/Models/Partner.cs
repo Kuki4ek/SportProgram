@@ -13,5 +13,11 @@ public partial class Partner
 
     public string Logo { get; set; }
 
+    public string ContactName { get; set; }
+
+    public string ContactEmail { get; set; }
+
+    public string ContactPhone { get; set; }
+
     public virtual ICollection<Item> Items { get; set; } = new List<Item>();
 }

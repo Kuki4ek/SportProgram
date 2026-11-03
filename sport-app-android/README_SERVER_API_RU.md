@@ -1,118 +1,177 @@
-# Подключение SportakusAuth к тестовому C# API
+# Sportakus Android V2 — контракт интеграции C# API
 
-## Что подключено
+Эта версия клиента выровнена по техническому описанию backend от 02.11. Ниже перечислены DTO, которые Android отправляет и ожидает.
 
-- `POST /api/auth/register` — регистрация пользователя;
-- `POST /api/auth/login` — вход по логину, почте или телефону;
-- `GET /api/users/me` — получение текущего пользователя с JWT;
-- настройка базового URL сервера прямо из приложения;
-- сохранение JWT после успешного входа или регистрации;
-- тестовая страница `Привет, <login>` на основе ответа `/api/users/me`;
-- отображение ошибок валидации `400`, отказа `401`, сетевых ошибок и ошибок сервера.
+## Регистрация и подтверждение почты
 
-## Важно: проверь путь входа с backend-разработчиком
-
-В последней присланной инструкции в разделе «Вход» повторно указан `POST /api/auth/register`. Это похоже на опечатку, потому что раньше backend-разработчик указывал `POST /api/auth/login` для входа. Поэтому Android-клиент вызывает:
-
-`POST {baseUrl}/api/auth/login`
-
-Перед тестированием попроси разработчика подтвердить, что именно этот маршрут зарегистрирован в ASP.NET Core. Регистрация остаётся на `POST /api/auth/register`.
-
-## JSON регистрации
-
-Пример запроса:
+1. Клиент проверяет поля локально: `login` обязателен; `email` должен иметь стандартный формат; пароль — **не менее 8 символов**; `phone` необязателен.
+2. Отправка кода: `POST /api/auth/email-confirm`.
 
 ```json
 {
   "login": "Alice",
-  "email": "example@example.com",
-  "password": "veryStrongPassword123",
+  "email": "alice@example.com"
+}
+```
+
+3. После ввода кода создание аккаунта: `POST /api/auth/register`.
+
+```json
+{
+  "login": "Alice",
+  "email": "alice@example.com",
+  "emailCode": "123456",
+  "password": "strongPassword123",
   "phone": "+7 (999) 999-99-99"
 }
 ```
 
-Если телефон не заполнен, свойство `phone` опускается.
+`phone` исключается из JSON, если поле не заполнено. Имя поля кода — строго `emailCode`, не `code`.
 
-Ожидаемый успешный ответ:
+## Вход и получение JWT
+
+`POST /api/auth/login` отправляет ровно одно поле идентификатора:
+
+```json
+{ "login": "Alice", "password": "strongPassword123" }
+```
+
+или
+
+```json
+{ "email": "alice@example.com", "password": "strongPassword123" }
+```
+
+или
+
+```json
+{ "phone": "+7 (999) 123-45-67", "password": "strongPassword123" }
+```
+
+**Важно: `register` и `login` не должны возвращать access token/JWT. По новой схеме оба успешных endpoint возвращают `refreshToken`:**
+
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+После этого Android автоматически вызывает `POST /api/auth/refresh`:
+
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+**Ожидаемый ответ `/api/auth/refresh`:**
 
 ```json
 {
-  "jwt": "VeryLongToken..."
+  "jwt": "ThisIsJWT",
+  "refreshToken": "NewRefreshToken"
 }
 ```
 
-## JSON входа
+Клиент считает авторизацию завершённой только после получения обоих непустых полей `jwt` и `refreshToken`. Оба токена сохраняются в `TokenStore`; при каждом успешном refresh сохраняется ротированный `refreshToken`.
 
-Клиент анализирует то, что пользователь ввёл в одно поле «Логин, почта или телефон», и отправляет одно соответствующее свойство вместе с паролем.
+## Обновление сессии и повтор запросов
 
-Вход по логину:
-
-```json
-{
-  "login": "Alice",
-  "password": "veryStrongPassword123"
-}
-```
-
-Вход по почте:
-
-```json
-{
-  "email": "example@example.com",
-  "password": "veryStrongPassword123"
-}
-```
-
-Вход по телефону:
-
-```json
-{
-  "phone": "+7 (999) 999-99-99",
-  "password": "veryStrongPassword123"
-}
-```
-
-Клиент определяет почту по наличию `@`, телефон — по `+` или числовому формату телефона, в остальных случаях отправляет `login`.
-
-Успешный ответ входа также должен содержать `jwt`.
-
-## GET /api/users/me
-
-После входа/регистрации токен сохраняется локально. При запросе профиля приложение отправляет:
+Для защищённых запросов Android передаёт:
 
 ```http
-GET {baseUrl}/api/users/me
 Authorization: Bearer <jwt>
-Accept: application/json
 ```
 
-Клиент ожидает JSON такого вида:
+При HTTP `401 Unauthorized` клиент один раз вызывает `POST /api/auth/refresh` с текущим `refreshToken`, сохраняет `jwt` и новый `refreshToken`, затем повторяет исходный запрос. Если `/api/auth/refresh` вернул `401`, локальная сессия очищается и пользователь должен войти заново. Для одновременных `401` используется защита от параллельного повторного расходования одного refresh-токена.
+
+Сейчас в клиенте этот механизм применяется к авторизованным endpoint, которые уже подключены в Android: `GET /api/users/me`, `PUT /api/users/me` и `POST /api/auth/logout`. Новые защищённые endpoint нужно вызывать через тот же механизм `requestAuthorized`.
+
+## Восстановление пароля
+
+### 1. Запрос кода
+
+`POST /api/auth/forgot-password/request` — в запросе ровно одно поле идентификатора:
+
+```json
+{ "email": "alice@example.com" }
+```
+
+Вместо `email` может быть `login` или `phone`.
+
+Ответ:
+
+```json
+{ "codeToken": "myCodeToken" }
+```
+
+### 2. Проверка кода
+
+`POST /api/auth/forgot-password/code`:
 
 ```json
 {
-  "login": "Alice",
-  "phone": "+7 (000) 000-00-03",
-  "email": "example@example.com",
-  "createdAt": "2026-10-20T22:16:15.27983Z",
-  "balance": 0,
-  "daysStraight": 0
+  "email": "alice@example.com",
+  "codeToken": "myCodeToken",
+  "emailCode": "536093"
 }
 ```
 
-Для приветствия используется поле `login`, поэтому экран покажет `Привет, Alice`.
+Вместо `email` может быть одно поле `login` или `phone`.
+
+Ответ:
+
+```json
+{ "resetPasswordToken": "meResetPasswordToken" }
+```
+
+### 3. Установка нового пароля
+
+`POST /api/auth/forgot-password/reset`:
+
+```json
+{
+  "email": "alice@example.com",
+  "resetPasswordToken": "meResetPasswordToken",
+  "newPassword": "newPassword"
+}
+```
+
+Вместо `email` может быть одно поле `login` или `phone`. Пароль должен содержать не менее 8 символов. Клиент принимает пустое тело успешного ответа.
+
+## Logout
+
+`POST /api/auth/logout` отправляется с JWT в заголовке и refresh-токеном в теле:
+
+```http
+Authorization: Bearer <jwt>
+Content-Type: application/json
+```
+
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+Успешный ответ может быть пустым. После запроса локальные токены удаляются.
+
+## Что backend обязан обеспечить
+
+Для работы после регистрации/входа без ошибки получения access token сервер должен:
+
+1. Возвращать HTTP 2xx и `{ "refreshToken": "..." }` из `/api/auth/register` и `/api/auth/login`.
+2. Принимать `{ "refreshToken": "..." }` в `/api/auth/refresh`.
+3. Возвращать из `/api/auth/refresh` оба поля: `jwt` и новый `refreshToken`.
+4. Возвращать HTTP 401 из `/api/auth/refresh`, если refresh-токен недействителен/истёк.
+5. Принимать logout с JWT в заголовке `Authorization: Bearer ...` и `refreshToken` в JSON.
+
+Если сервер уже реализует именно эти ответы, менять backend не требуется. Если `/register` или `/login` не возвращает refreshToken, либо `/refresh` не возвращает jwt, соответствующую часть backend нужно исправить: получить JWT только на стороне Android без серверной выдачи невозможно.
+
+## Профиль — отдельно от auth-контракта
+
+Профиль запрашивается через `GET /api/users/me` с JWT. Сохранение профиля в этой версии всё ещё предполагает `PUT /api/users/me` и DTO `login`, `email`, `phone`, `fullName`, `birthDate`, `height`, `weight`, `gender`. Эти пользовательские endpoints и DTO не перечислены в техническом описании auth от 02.11 — их следует сверить отдельно с backend-разработчиком.
 
 ## Настройка адреса сервера
 
-На стартовом экране нажми «Адрес сервера» и введи только базовый URL, без `/api/...` в конце.
+В приложении открой «Адрес сервера» и укажи базовый URL без `/api/...`:
 
-- Android Emulator и сервер на том же компьютере: обычно `http://10.0.2.2:5000`.
-- Физический телефон в той же Wi-Fi сети: `http://<LAN-IP-компьютера>:<порт>`.
-- Телефон в другой сети: нужен публичный HTTPS URL или временный HTTPS-туннель; `localhost` и `10.0.2.2` для этого не подходят.
+- Android Emulator: обычно `http://10.0.2.2:5000`;
+- физический телефон в той же Wi-Fi сети: `http://<LAN-IP-компьютера>:<порт>`;
+- другая сеть: публичный HTTPS URL или HTTPS-туннель.
 
-ASP.NET Core должен принимать подключения на соответствующем интерфейсе, а firewall — разрешать соединение. Убедитесь, что URL совпадает с фактическим портом `launchSettings.json` или настройкой запуска.
-
-## Статус
-
-Тестовая сборка использует `HttpURLConnection`, `org.json.JSONObject`, Kotlin coroutines и `Dispatchers.IO`; дополнительная HTTP-библиотека не нужна. JWT сохраняется в `SharedPreferences` как временное решение для учебной демонстрации. Перед production нужен HTTPS и защищённое хранение токена.
-
-В этой версии не подключены OAuth Google/Яндекс, восстановление пароля и обновление/refresh JWT. Они потребуют дополнительных endpoints и согласования контрактов.
+Для production используй HTTPS и защищённое хранилище токенов на основе Android Keystore.

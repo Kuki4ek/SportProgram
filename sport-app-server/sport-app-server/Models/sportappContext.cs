@@ -13,6 +13,10 @@ public partial class sportappContext : DbContext
     {
     }
 
+    public virtual DbSet<Achievement> Achievements { get; set; }
+
+    public virtual DbSet<Category> Categories { get; set; }
+
     public virtual DbSet<Exercise> Exercises { get; set; }
 
     public virtual DbSet<ExerciseInTask> ExerciseInTasks { get; set; }
@@ -23,7 +27,11 @@ public partial class sportappContext : DbContext
 
     public virtual DbSet<Partner> Partners { get; set; }
 
-    public virtual DbSet<Reward> Rewards { get; set; }
+    public virtual DbSet<Promocode> Promocodes { get; set; }
+
+    public virtual DbSet<RefreshToken> RefreshTokens { get; set; }
+
+    public virtual DbSet<Tag> Tags { get; set; }
 
     public virtual DbSet<Task> Tasks { get; set; }
 
@@ -31,12 +39,54 @@ public partial class sportappContext : DbContext
 
     public virtual DbSet<User> Users { get; set; }
 
-    public virtual DbSet<UserItem> UserItems { get; set; }
+    public virtual DbSet<UserAchievement> UserAchievements { get; set; }
 
     public virtual DbSet<UserTask> UserTasks { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.HasPostgresExtension("pgcrypto");
+
+        modelBuilder.Entity<Achievement>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("achievements_pkey");
+
+            entity.ToTable("achievements");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Description)
+                .IsRequired()
+                .HasColumnName("description");
+            entity.Property(e => e.Icon)
+                .IsRequired()
+                .HasMaxLength(255)
+                .HasColumnName("icon");
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(100)
+                .HasColumnName("name");
+            entity.Property(e => e.RewardLevel)
+                .HasDefaultValue(1)
+                .HasColumnName("reward_level");
+        });
+
+        modelBuilder.Entity<Category>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("categories_pkey");
+
+            entity.ToTable("categories");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Icon)
+                .IsRequired()
+                .HasMaxLength(255)
+                .HasColumnName("icon");
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(50)
+                .HasColumnName("name");
+        });
+
         modelBuilder.Entity<Exercise>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("exercises_pkey");
@@ -45,13 +95,16 @@ public partial class sportappContext : DbContext
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Animation)
+                .IsRequired()
                 .HasMaxLength(255)
                 .HasColumnName("animation");
+            entity.Property(e => e.DefaultCalories).HasColumnName("default_calories");
             entity.Property(e => e.Description).HasColumnName("description");
             entity.Property(e => e.Name)
                 .IsRequired()
                 .HasMaxLength(255)
                 .HasColumnName("name");
+            entity.Property(e => e.Reward).HasColumnName("reward");
         });
 
         modelBuilder.Entity<ExerciseInTask>(entity =>
@@ -62,7 +115,12 @@ public partial class sportappContext : DbContext
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.ExerciseId).HasColumnName("exercise_id");
-            entity.Property(e => e.Repeats).HasColumnName("repeats");
+            entity.Property(e => e.OrderIndex)
+                .HasDefaultValue(1)
+                .HasColumnName("order_index");
+            entity.Property(e => e.Repeats)
+                .HasDefaultValue(1)
+                .HasColumnName("repeats");
             entity.Property(e => e.TaskId).HasColumnName("task_id");
 
             entity.HasOne(d => d.Exercise).WithMany(p => p.ExerciseInTasks)
@@ -84,9 +142,13 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
-            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.Property(e => e.Calories).HasColumnName("calories");
             entity.Property(e => e.ExerciseId).HasColumnName("exercise_id");
-            entity.Property(e => e.IsCompleted).HasColumnName("is_completed");
+            entity.Property(e => e.Status)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValueSql("'PENDING'::character varying")
+                .HasColumnName("status");
             entity.Property(e => e.UserTaskId).HasColumnName("user_task_id");
 
             entity.HasOne(d => d.Exercise).WithMany(p => p.ExerciseJournals)
@@ -108,8 +170,21 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
+            entity.Property(e => e.CategoryId).HasColumnName("category_id");
+            entity.Property(e => e.IsConsumable)
+                .HasDefaultValue(true)
+                .HasColumnName("is_consumable");
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(150)
+                .HasColumnName("name");
             entity.Property(e => e.PartnerId).HasColumnName("partner_id");
             entity.Property(e => e.Price).HasColumnName("price");
+
+            entity.HasOne(d => d.Category).WithMany(p => p.Items)
+                .HasForeignKey(d => d.CategoryId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("items_category_id_fkey");
 
             entity.HasOne(d => d.Partner).WithMany(p => p.Items)
                 .HasForeignKey(d => d.PartnerId)
@@ -124,7 +199,18 @@ public partial class sportappContext : DbContext
             entity.ToTable("partners");
 
             entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.ContactEmail)
+                .HasMaxLength(100)
+                .HasColumnName("contact_email");
+            entity.Property(e => e.ContactName)
+                .IsRequired()
+                .HasMaxLength(100)
+                .HasColumnName("contact_name");
+            entity.Property(e => e.ContactPhone)
+                .HasMaxLength(20)
+                .HasColumnName("contact_phone");
             entity.Property(e => e.Logo)
+                .IsRequired()
                 .HasMaxLength(255)
                 .HasColumnName("logo");
             entity.Property(e => e.Name)
@@ -132,14 +218,89 @@ public partial class sportappContext : DbContext
                 .HasColumnName("name");
         });
 
-        modelBuilder.Entity<Reward>(entity =>
+        modelBuilder.Entity<Promocode>(entity =>
         {
-            entity.HasKey(e => e.Id).HasName("rewards_pkey");
+            entity.HasKey(e => e.Id).HasName("promocodes_pkey");
 
-            entity.ToTable("rewards");
+            entity.ToTable("promocodes");
+
+            entity.HasIndex(e => new { e.ItemId, e.Status }, "idx_promocodes_item_status").HasFilter("((status)::text = 'AVAILABLE'::text)");
+
+            entity.Property(e => e.Id)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("id");
+            entity.Property(e => e.ClaimedAt).HasColumnName("claimed_at");
+            entity.Property(e => e.ClaimedByUserId).HasColumnName("claimed_by_user_id");
+            entity.Property(e => e.Code)
+                .IsRequired()
+                .HasMaxLength(255)
+                .HasColumnName("code");
+            entity.Property(e => e.ItemId).HasColumnName("item_id");
+            entity.Property(e => e.Status)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValueSql("'AVAILABLE'::character varying")
+                .HasColumnName("status");
+
+            entity.HasOne(d => d.ClaimedByUser).WithMany(p => p.Promocodes)
+                .HasForeignKey(d => d.ClaimedByUserId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("promocodes_claimed_by_user_id_fkey");
+
+            entity.HasOne(d => d.Item).WithMany(p => p.Promocodes)
+                .HasForeignKey(d => d.ItemId)
+                .HasConstraintName("promocodes_item_id_fkey");
+        });
+
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("refresh_tokens_pkey");
+
+            entity.ToTable("refresh_tokens");
+
+            entity.HasIndex(e => e.TokenHash, "idx_refresh_tokens_token_hash");
+
+            entity.HasIndex(e => e.TokenHash, "refresh_tokens_token_hash_key").IsUnique();
+
+            entity.Property(e => e.Id)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Device).HasColumnName("device");
+            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(e => e.Ip).HasColumnName("ip");
+            entity.Property(e => e.ReplacedBy).HasColumnName("replaced_by");
+            entity.Property(e => e.RevokedAt).HasColumnName("revoked_at");
+            entity.Property(e => e.TokenHash)
+                .IsRequired()
+                .HasMaxLength(255)
+                .HasColumnName("token_hash");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.RefreshTokens)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("refresh_tokens_user_id_fkey");
+        });
+
+        modelBuilder.Entity<Tag>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("tags_pkey");
+
+            entity.ToTable("tags");
+
+            entity.HasIndex(e => e.Code, "tags_code_key").IsUnique();
 
             entity.Property(e => e.Id).HasColumnName("id");
-            entity.Property(e => e.Amount).HasColumnName("amount");
+            entity.Property(e => e.Code)
+                .IsRequired()
+                .HasMaxLength(50)
+                .HasColumnName("code");
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(100)
+                .HasColumnName("name");
         });
 
         modelBuilder.Entity<Task>(entity =>
@@ -151,12 +312,35 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
-            entity.Property(e => e.RewardId).HasColumnName("reward_id");
+            entity.Property(e => e.CoverImage)
+                .HasMaxLength(255)
+                .HasColumnName("cover_image");
+            entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.EstimatedDurationMinutes)
+                .HasDefaultValue(10)
+                .HasColumnName("estimated_duration_minutes");
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(150)
+                .HasColumnName("name");
 
-            entity.HasOne(d => d.Reward).WithMany(p => p.Tasks)
-                .HasForeignKey(d => d.RewardId)
-                .OnDelete(DeleteBehavior.Restrict)
-                .HasConstraintName("tasks_reward_id_fkey");
+            entity.HasMany(d => d.Tags).WithMany(p => p.Tasks)
+                .UsingEntity<Dictionary<string, object>>(
+                    "TaskTag",
+                    r => r.HasOne<Tag>().WithMany()
+                        .HasForeignKey("TagId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("task_tags_tag_id_fkey"),
+                    l => l.HasOne<Task>().WithMany()
+                        .HasForeignKey("TaskId")
+                        .HasConstraintName("task_tags_task_id_fkey"),
+                    j =>
+                    {
+                        j.HasKey("TaskId", "TagId").HasName("task_tags_pkey");
+                        j.ToTable("task_tags");
+                        j.IndexerProperty<Guid>("TaskId").HasColumnName("task_id");
+                        j.IndexerProperty<int>("TagId").HasColumnName("tag_id");
+                    });
         });
 
         modelBuilder.Entity<Transaction>(entity =>
@@ -165,7 +349,7 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("transactions");
 
-            entity.HasIndex(e => new { e.UserId, e.CreatedAt }, "idx_transactions_user_id").IsDescending(false, true);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt }, "idx_transactions_user_date").IsDescending(false, true);
 
             entity.HasIndex(e => e.IdempotencyKey, "transactions_idempotency_key_key").IsUnique();
 
@@ -174,10 +358,10 @@ public partial class sportappContext : DbContext
                 .HasColumnName("id");
             entity.Property(e => e.Amount).HasColumnName("amount");
             entity.Property(e => e.BoughtItemId).HasColumnName("bought_item_id");
-            entity.Property(e => e.CompletedTaskId).HasColumnName("completed_task_id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")
                 .HasColumnName("created_at");
+            entity.Property(e => e.EndedUserTaskId).HasColumnName("ended_user_task_id");
             entity.Property(e => e.IdempotencyKey)
                 .IsRequired()
                 .HasMaxLength(255)
@@ -193,10 +377,10 @@ public partial class sportappContext : DbContext
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("transactions_bought_item_id_fkey");
 
-            entity.HasOne(d => d.CompletedTask).WithMany(p => p.Transactions)
-                .HasForeignKey(d => d.CompletedTaskId)
+            entity.HasOne(d => d.EndedUserTask).WithMany(p => p.Transactions)
+                .HasForeignKey(d => d.EndedUserTaskId)
                 .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("transactions_completed_task_id_fkey");
+                .HasConstraintName("transactions_ended_user_task_id_fkey");
 
             entity.HasOne(d => d.User).WithMany(p => p.Transactions)
                 .HasForeignKey(d => d.UserId)
@@ -210,19 +394,34 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("users");
 
+            entity.HasIndex(e => e.Email, "users_email_key").IsUnique();
+
+            entity.HasIndex(e => e.Login, "users_login_key").IsUnique();
+
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
+            entity.Property(e => e.ActivityLevel)
+                .IsRequired()
+                .HasMaxLength(30)
+                .HasDefaultValueSql("'NOVICE'::character varying")
+                .HasColumnName("activity_level");
             entity.Property(e => e.Balance).HasColumnName("balance");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")
                 .HasColumnName("created_at");
             entity.Property(e => e.DaysStraight).HasColumnName("days_straight");
             entity.Property(e => e.Email)
+                .IsRequired()
                 .HasMaxLength(100)
                 .HasColumnName("email");
-            entity.Property(e => e.Nickname)
+            entity.Property(e => e.HasMedicalRestrictions).HasColumnName("has_medical_restrictions");
+            entity.Property(e => e.LastActiveDate).HasColumnName("last_active_date");
+            entity.Property(e => e.Login)
                 .IsRequired()
+                .HasMaxLength(50)
+                .HasColumnName("login");
+            entity.Property(e => e.Nickname)
                 .HasMaxLength(50)
                 .HasColumnName("nickname");
             entity.Property(e => e.PasswordHash)
@@ -232,53 +431,43 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.PhoneNumber)
                 .HasMaxLength(25)
                 .HasColumnName("phone_number");
+            entity.Property(e => e.PreferredDaysPerWeek)
+                .HasDefaultValue(3)
+                .HasColumnName("preferred_days_per_week");
+            entity.Property(e => e.PreferredDuration)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValueSql("'5_10_MIN'::character varying")
+                .HasColumnName("preferred_duration");
+            entity.Property(e => e.PremiumExpiresAt).HasColumnName("premium_expires_at");
+            entity.Property(e => e.StreakFreezeUsedAt).HasColumnName("streak_freeze_used_at");
+            entity.Property(e => e.UserRole)
+                .IsRequired()
+                .HasMaxLength(25)
+                .HasDefaultValueSql("'MEMBER'::character varying")
+                .HasColumnName("user_role");
+            entity.Property(e => e.XpPoints).HasColumnName("xp_points");
         });
 
-        modelBuilder.Entity<UserItem>(entity =>
+        modelBuilder.Entity<UserAchievement>(entity =>
         {
-            entity.HasKey(e => e.Id).HasName("user_items_pkey");
+            entity.HasKey(e => new { e.UserId, e.AchievementId }).HasName("user_achievements_pkey");
 
-            entity.ToTable("user_items");
+            entity.ToTable("user_achievements");
 
-            entity.HasIndex(e => new { e.UserId, e.Status }, "idx_user_items_active").HasFilter("((status)::text = 'ACTIVE'::text)");
-
-            entity.HasIndex(e => e.TransactionId, "user_items_transaction_id_key").IsUnique();
-
-            entity.Property(e => e.Id)
-                .HasDefaultValueSql("gen_random_uuid()")
-                .HasColumnName("id");
-            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
-            entity.Property(e => e.ItemId).HasColumnName("item_id");
-            entity.Property(e => e.PromoCode)
-                .IsRequired()
-                .HasMaxLength(255)
-                .HasColumnName("promo_code");
-            entity.Property(e => e.PurchasedAt)
-                .HasDefaultValueSql("now()")
-                .HasColumnName("purchased_at");
-            entity.Property(e => e.Status)
-                .IsRequired()
-                .HasMaxLength(30)
-                .HasDefaultValueSql("'ACTIVE'::character varying")
-                .HasColumnName("status");
-            entity.Property(e => e.TransactionId).HasColumnName("transaction_id");
-            entity.Property(e => e.UsedAt).HasColumnName("used_at");
             entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.AchievementId).HasColumnName("achievement_id");
+            entity.Property(e => e.UnlockedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("unlocked_at");
 
-            entity.HasOne(d => d.Item).WithMany(p => p.UserItems)
-                .HasForeignKey(d => d.ItemId)
-                .OnDelete(DeleteBehavior.Restrict)
-                .HasConstraintName("user_items_item_id_fkey");
+            entity.HasOne(d => d.Achievement).WithMany(p => p.UserAchievements)
+                .HasForeignKey(d => d.AchievementId)
+                .HasConstraintName("user_achievements_achievement_id_fkey");
 
-            entity.HasOne(d => d.Transaction).WithOne(p => p.UserItem)
-                .HasForeignKey<UserItem>(d => d.TransactionId)
-                .OnDelete(DeleteBehavior.Restrict)
-                .HasConstraintName("user_items_transaction_id_fkey");
-
-            entity.HasOne(d => d.User).WithMany(p => p.UserItems)
+            entity.HasOne(d => d.User).WithMany(p => p.UserAchievements)
                 .HasForeignKey(d => d.UserId)
-                .OnDelete(DeleteBehavior.Restrict)
-                .HasConstraintName("user_items_user_id_fkey");
+                .HasConstraintName("user_achievements_user_id_fkey");
         });
 
         modelBuilder.Entity<UserTask>(entity =>
@@ -287,7 +476,7 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("user_tasks");
 
-            entity.HasIndex(e => new { e.UserId, e.IsCompleted }, "idx_user_tasks_user");
+            entity.HasIndex(e => new { e.UserId, e.Status }, "idx_user_tasks_user_status");
 
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
@@ -295,7 +484,13 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")
                 .HasColumnName("created_at");
-            entity.Property(e => e.IsCompleted).HasColumnName("is_completed");
+            entity.Property(e => e.EndedAt).HasColumnName("ended_at");
+            entity.Property(e => e.RewardSum).HasColumnName("reward_sum");
+            entity.Property(e => e.Status)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValueSql("'IN_PROGRESS'::character varying")
+                .HasColumnName("status");
             entity.Property(e => e.TaskId).HasColumnName("task_id");
             entity.Property(e => e.UserId).HasColumnName("user_id");
 

@@ -15,6 +15,8 @@ public partial class ExerciseInTask
 
     public int Repeats { get; set; }
 
+    public int OrderIndex { get; set; }
+
     public virtual Exercise Exercise { get; set; }
 
     public virtual Task Task { get; set; }

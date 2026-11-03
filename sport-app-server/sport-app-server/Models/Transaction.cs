@@ -17,7 +17,7 @@ public partial class Transaction
 
     public Guid? BoughtItemId { get; set; }
 
-    public Guid? CompletedTaskId { get; set; }
+    public Guid? EndedUserTaskId { get; set; }
 
     public string IdempotencyKey { get; set; }
 
@@ -25,9 +25,7 @@ public partial class Transaction
 
     public virtual Item BoughtItem { get; set; }
 
-    public virtual Task CompletedTask { get; set; }
+    public virtual UserTask EndedUserTask { get; set; }
 
     public virtual User User { get; set; }
-
-    public virtual UserItem UserItem { get; set; }
 }

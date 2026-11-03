@@ -9,9 +9,9 @@ public partial class User
 {
     public Guid Id { get; set; }
 
-    public string Nickname { get; set; }
+    public string Login { get; set; }
 
-    public int Balance { get; set; }
+    public string Nickname { get; set; }
 
     public string Email { get; set; }
 
@@ -19,13 +19,37 @@ public partial class User
 
     public string PasswordHash { get; set; }
 
+    public string UserRole { get; set; }
+
+    public int Balance { get; set; }
+
+    public long XpPoints { get; set; }
+
     public int DaysStraight { get; set; }
+
+    public DateOnly? LastActiveDate { get; set; }
+
+    public DateTime? PremiumExpiresAt { get; set; }
+
+    public DateTime? StreakFreezeUsedAt { get; set; }
+
+    public string ActivityLevel { get; set; }
+
+    public string PreferredDuration { get; set; }
+
+    public int PreferredDaysPerWeek { get; set; }
+
+    public bool HasMedicalRestrictions { get; set; }
 
     public DateTime CreatedAt { get; set; }
 
+    public virtual ICollection<Promocode> Promocodes { get; set; } = new List<Promocode>();
+
+    public virtual ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
+
     public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 
-    public virtual ICollection<UserItem> UserItems { get; set; } = new List<UserItem>();
+    public virtual ICollection<UserAchievement> UserAchievements { get; set; } = new List<UserAchievement>();
 
     public virtual ICollection<UserTask> UserTasks { get; set; } = new List<UserTask>();
 }

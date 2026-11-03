@@ -19,6 +19,14 @@
    "T4TemplatePath": null,
    "Tables": [
       {
+         "Name": "public.achievements",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.categories",
+         "ObjectType": 0
+      },
+      {
          "Name": "public.exercise_in_task",
          "ObjectType": 0
       },
@@ -39,7 +47,19 @@
          "ObjectType": 0
       },
       {
-         "Name": "public.rewards",
+         "Name": "public.promocodes",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.refresh_tokens",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.tags",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.task_tags",
          "ObjectType": 0
       },
       {
@@ -51,7 +71,7 @@
          "ObjectType": 0
       },
       {
-         "Name": "public.user_items",
+         "Name": "public.user_achievements",
          "ObjectType": 0
       },
       {

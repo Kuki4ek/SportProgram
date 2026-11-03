@@ -13,9 +13,9 @@ public partial class ExerciseJournal
 
     public int ExerciseId { get; set; }
 
-    public bool IsCompleted { get; set; }
+    public string Status { get; set; }
 
-    public DateTime? CompletedAt { get; set; }
+    public float Calories { get; set; }
 
     public virtual Exercise Exercise { get; set; }
 

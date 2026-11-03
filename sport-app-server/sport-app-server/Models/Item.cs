@@ -11,11 +11,19 @@ public partial class Item
 
     public int PartnerId { get; set; }
 
+    public int CategoryId { get; set; }
+
+    public string Name { get; set; }
+
     public int Price { get; set; }
+
+    public bool IsConsumable { get; set; }
+
+    public virtual Category Category { get; set; }
 
     public virtual Partner Partner { get; set; }
 
-    public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
+    public virtual ICollection<Promocode> Promocodes { get; set; } = new List<Promocode>();
 
-    public virtual ICollection<UserItem> UserItems { get; set; } = new List<UserItem>();
+    public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 }
