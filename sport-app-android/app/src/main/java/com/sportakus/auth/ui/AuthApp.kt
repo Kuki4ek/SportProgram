@@ -157,11 +157,18 @@ fun AuthApp() {
                             .apply()
                     }
                     is CurrentUserApiResult.Failure -> {
+                        if (!result.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refreshToken)
+                        }
                         // Do not manufacture profile data on API failure. Unknown fields stay blank/zero.
                         currentProfile = currentProfile.copy(
                             login = currentProfile.login.ifBlank { currentUserName }
                         )
                         notice = result.message
+                        if (result.httpStatus == 401) {
+                            TokenStore.clear(context)
+                            destination = AuthDestination.LOGIN
+                        }
                     }
                 }
             }
@@ -795,9 +802,12 @@ fun AuthApp() {
                                                     serverRegistrationFieldErrors = mappedErrors
                                                     val details = result.fieldErrors.values.flatten().distinct().joinToString("\n")
                                                     notice = if (details.isBlank()) result.message else "${result.message}\n$details"
-                                                    // Field errors that require editing the form should return the user there;
-                                                    // code-related errors keep the user on the confirmation screen.
-                                                    if (mappedErrors.keys.any { it !in setOf("code", "emailcode") }) {
+                                                    if (result.accountCreated) {
+                                                        // Do not submit registration a second time: the backend may already have created the account.
+                                                        loginIdentifier = registrationEmail
+                                                        loginPassword = registrationPassword
+                                                        destination = AuthDestination.LOGIN
+                                                    } else if (mappedErrors.keys.any { it !in setOf("code", "emailcode") }) {
                                                         destination = AuthDestination.REGISTER
                                                     }
                                                 }
@@ -820,7 +830,7 @@ fun AuthApp() {
                                 val kind = when (recoveryMethod) {
                                     "Почта" -> "email"
                                     "Телефон" -> "phone"
-                                    else -> "nickname"
+                                    else -> "login"
                                 }
                                 val locallyValid = when (kind) {
                                     "email" -> registrationEmailError(recoveryContact) == null
@@ -850,7 +860,7 @@ fun AuthApp() {
                                         when (result) {
                                             is PasswordRecoveryApiResult.Success -> {
                                                 if (result.codeToken.isNullOrBlank()) {
-                                                    notice = "Сервер отправил ответ без code_token. Проверь контракт forgot-password/request."
+                                                    notice = "Сервер отправил ответ без codeToken. Проверь контракт forgot-password/request."
                                                 } else {
                                                     recoveryCodeToken = result.codeToken
                                                     recoveryResetToken = ""
@@ -882,7 +892,7 @@ fun AuthApp() {
                                         val kind = when (recoveryMethod) {
                                             "Почта" -> "email"
                                             "Телефон" -> "phone"
-                                            else -> "nickname"
+                                            else -> "login"
                                         }
                                         val resendResult = withContext(Dispatchers.IO) {
                                             AuthApi.requestPasswordReset(
@@ -899,7 +909,7 @@ fun AuthApp() {
                                                     recoveryVerificationCode = ""
                                                     recoveryResendKey += 1
                                                     notice = null
-                                                } else notice = "Сервер не вернул code_token для повторной отправки."
+                                                } else notice = "Сервер не вернул codeToken для повторной отправки."
                                             }
                                             is PasswordRecoveryApiResult.Failure -> notice = resendResult.message
                                         }
@@ -916,8 +926,16 @@ fun AuthApp() {
                                         val result = withContext(Dispatchers.IO) {
                                             AuthApi.verifyPasswordResetCode(
                                                 baseUrl = serverBaseUrl,
+                                                contactKind = when (recoveryMethod) {
+                                                    "Почта" -> "email"
+                                                    "Телефон" -> "phone"
+                                                    else -> "login"
+                                                },
+                                                identifier = if (recoveryMethod == "Телефон") {
+                                                    formatPhoneForRegistrationApi(recoveryContact) ?: recoveryContact
+                                                } else recoveryContact.trim(),
                                                 codeToken = recoveryCodeToken,
-                                                verifyCode = recoveryVerificationCode
+                                                emailCode = recoveryVerificationCode
                                             )
                                         }
                                         recoverySubmitting = false
@@ -955,10 +973,16 @@ fun AuthApp() {
                                             val result = withContext(Dispatchers.IO) {
                                                 AuthApi.resetPassword(
                                                     baseUrl = serverBaseUrl,
-                                                    codeToken = recoveryCodeToken,
-                                                    verifyCode = recoveryVerificationCode,
-                                                    newPassword = newPassword,
-                                                    resetToken = recoveryResetToken.takeIf { it.isNotBlank() }
+                                                    contactKind = when (recoveryMethod) {
+                                                        "Почта" -> "email"
+                                                        "Телефон" -> "phone"
+                                                        else -> "login"
+                                                    },
+                                                    identifier = if (recoveryMethod == "Телефон") {
+                                                        formatPhoneForRegistrationApi(recoveryContact) ?: recoveryContact
+                                                    } else recoveryContact.trim(),
+                                                    resetPasswordToken = recoveryResetToken,
+                                                    newPassword = newPassword
                                                 )
                                             }
                                             recoverySubmitting = false
@@ -1063,6 +1087,13 @@ fun AuthApp() {
                                                 onCompleted(true)
                                             }
                                             is AuthActionApiResult.Failure -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: TokenStore.getRefreshToken(context))
+                                                }
+                                                if (result.httpStatus == 401) {
+                                                    TokenStore.clear(context)
+                                                    destination = AuthDestination.LOGIN
+                                                }
                                                 notice = result.message
                                                 onCompleted(false)
                                             }

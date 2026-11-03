@@ -82,6 +82,13 @@ fun ServerHelloScreen(
                     displayName = result.displayName
                 }
                 is CurrentUserApiResult.Failure -> {
+                    if (!result.renewedAccessToken.isNullOrBlank()) {
+                        TokenStore.saveTokens(
+                            context,
+                            result.renewedAccessToken,
+                            result.renewedRefreshToken ?: refreshToken
+                        )
+                    }
                     errorMessage = result.message
                     if (result.httpStatus == 401) {
                         TokenStore.clear(context)

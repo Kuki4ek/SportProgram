@@ -7,7 +7,7 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
 
-/** Request contract for POST /api/auth/register. */
+/** Exact payload for POST /api/auth/register. */
 data class RegisterRequest(
     val login: String,
     val email: String,
@@ -18,15 +18,19 @@ data class RegisterRequest(
 
 sealed class RegisterApiResult {
     data class Success(
-        /** Kept as `jwt` for compatibility with existing UI/account-key code. */
+        /** JWT obtained by the follow-up POST /api/auth/refresh. */
         val jwt: String,
-        val refreshToken: String? = null,
+        /** Rotated refresh token returned by /api/auth/refresh. */
+        val refreshToken: String,
         val httpStatus: Int
     ) : RegisterApiResult()
+
     data class Failure(
         val httpStatus: Int?,
         val message: String,
-        val fieldErrors: Map<String, List<String>> = emptyMap()
+        val fieldErrors: Map<String, List<String>> = emptyMap(),
+        /** True means /register returned 2xx and the account may already exist. */
+        val accountCreated: Boolean = false
     ) : RegisterApiResult()
 }
 
@@ -67,17 +71,25 @@ sealed class CurrentUserApiResult {
     ) : CurrentUserApiResult() {
         val displayName: String get() = profile.displayName
     }
-    data class Failure(val httpStatus: Int?, val message: String) : CurrentUserApiResult()
+
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : CurrentUserApiResult()
 }
 
 data class LoginApiRequest(val identifier: String, val password: String)
 
 sealed class LoginApiResult {
     data class Success(
+        /** JWT obtained by the follow-up POST /api/auth/refresh. */
         val jwt: String,
-        val refreshToken: String? = null,
+        val refreshToken: String,
         val httpStatus: Int
     ) : LoginApiResult()
+
     data class Failure(
         val httpStatus: Int?,
         val message: String,
@@ -91,6 +103,7 @@ sealed class PasswordRecoveryApiResult {
         val codeToken: String? = null,
         val resetToken: String? = null
     ) : PasswordRecoveryApiResult()
+
     data class Failure(val httpStatus: Int?, val message: String) : PasswordRecoveryApiResult()
 }
 
@@ -100,20 +113,21 @@ sealed class AuthActionApiResult {
         val renewedAccessToken: String? = null,
         val renewedRefreshToken: String? = null
     ) : AuthActionApiResult()
-    data class Failure(val httpStatus: Int?, val message: String) : AuthActionApiResult()
+
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : AuthActionApiResult()
 }
 
 sealed class RefreshTokenApiResult {
-    data class Success(val accessToken: String, val refreshToken: String?, val httpStatus: Int) : RefreshTokenApiResult()
+    data class Success(val accessToken: String, val refreshToken: String, val httpStatus: Int) : RefreshTokenApiResult()
     data class Failure(val httpStatus: Int?, val message: String) : RefreshTokenApiResult()
 }
 
-/**
- * Endpoints are centralized here so API route changes do not require editing UI code.
- * Registration routes are taken from the 02.11 backend update. Password-reset, refresh,
- * and logout route names follow the integration contract currently available to the client;
- * confirm these three route names with the backend if its branch uses different names.
- */
+/** API routes explicitly named in the backend specification dated 02.11. */
 object AuthEndpoints {
     const val EMAIL_CONFIRM = "/api/auth/email-confirm"
     const val REGISTER = "/api/auth/register"
@@ -127,7 +141,10 @@ object AuthEndpoints {
     const val UPDATE_CURRENT_USER = "/api/users/me"
 }
 
-/** Lightweight HTTP client based on HttpURLConnection and org.json. */
+/**
+ * HTTP client and DTO mapping for the C# backend. Authentication contract:
+ * register/login -> refreshToken -> POST /refresh -> jwt + rotated refreshToken.
+ */
 object AuthApi {
     private data class HttpResult(
         val status: Int,
@@ -137,6 +154,18 @@ object AuthApi {
         fun json(): JSONObject? = body.takeIf { it.isNotBlank() }
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
     }
+
+    private data class AuthorizedHttpResult(
+        val response: HttpResult,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null,
+        val refreshError: String? = null
+    )
+
+    private val refreshLock = Any()
+    @Volatile private var lastRefreshSourceToken: String? = null
+    @Volatile private var lastRefreshResult: RefreshTokenApiResult.Success? = null
+    @Volatile private var lastRefreshAtMillis: Long = 0L
 
     private fun request(
         baseUrl: String,
@@ -177,10 +206,36 @@ object AuthApi {
         }
     }
 
+    /** Searches root and common API envelopes (data/result/tokens/auth/user) case-insensitively. */
+    private fun findString(root: JSONObject?, acceptedNames: Set<String>): String? {
+        if (root == null) return null
+        fun visit(obj: JSONObject, depth: Int): String? {
+            if (depth > 5) return null
+            val keys = obj.keys().asSequence().toList()
+            for (accepted in acceptedNames) {
+                val key = keys.firstOrNull { it.equals(accepted, ignoreCase = true) } ?: continue
+                val value = obj.opt(key)
+                if (value is String && value.isNotBlank() && !value.equals("null", true)) return value.trim()
+            }
+            for (key in keys) {
+                when (val value = obj.opt(key)) {
+                    is JSONObject -> visit(value, depth + 1)?.let { return it }
+                    is JSONArray -> for (index in 0 until value.length()) {
+                        val child = value.opt(index)
+                        if (child is JSONObject) visit(child, depth + 1)?.let { return it }
+                    }
+                }
+            }
+            return null
+        }
+        return visit(root, 0)
+    }
+
     private fun accessToken(result: HttpResult): String? {
-        val json = result.json()
-        val bodyToken = listOf("accessToken", "access_token", "jwt", "JWT", "token")
-            .firstNotNullOfOrNull { key -> json?.optString(key)?.trim()?.takeIf { it.isNotEmpty() && it != "null" } }
+        val bodyToken = findString(
+            result.json(),
+            linkedSetOf("jwt", "accessToken", "access_token", "token")
+        )
         val header = result.authorizationHeader?.trim().orEmpty()
         val headerToken = if (header.startsWith("Bearer ", ignoreCase = true)) {
             header.substringAfter(' ').trim().takeIf { it.isNotEmpty() }
@@ -188,25 +243,28 @@ object AuthApi {
         return bodyToken ?: headerToken
     }
 
-    private fun refreshToken(result: HttpResult): String? {
-        val json = result.json()
-        return listOf("refreshToken", "refresh_token")
-            .firstNotNullOfOrNull { key -> json?.optString(key)?.trim()?.takeIf { it.isNotEmpty() && it != "null" } }
+    private fun refreshToken(result: HttpResult): String? = findString(
+        result.json(),
+        setOf("refreshToken", "refresh_token")
+    )
+
+    private fun errorFromJson(result: HttpResult): String? {
+        val json = result.json() ?: return null
+        return findString(json, setOf("detail", "message", "title", "error", "error_status"))
+            ?.takeIf { it.isNotBlank() }
     }
 
-    private fun serverMessage(result: HttpResult, fallback: String): String {
-        val json = result.json()
-        return json?.optString("detail")?.takeIf { it.isNotBlank() }
-            ?: json?.optString("message")?.takeIf { it.isNotBlank() }
-            ?: json?.optString("title")?.takeIf { it.isNotBlank() }
-            ?: when (result.status) {
-                401 -> "Сессия недействительна. Войдите в приложение снова."
-                404 -> "Запрашиваемый endpoint не найден (HTTP 404). Проверь маршрут на C# API."
-                429 -> "Слишком много запросов. Подождите и попробуйте ещё раз."
-                in 500..599 -> "Ошибка сервера (${result.status}). Проверь журнал C# API."
-                else -> "$fallback (HTTP ${result.status})."
-            }
-    }
+    private fun serverMessage(result: HttpResult, fallback: String): String =
+        errorFromJson(result) ?: when (result.status) {
+            400 -> "$fallback. Проверь переданные данные (HTTP 400)."
+            401 -> "Сессия недействительна. Необходимо войти в приложение снова."
+            404 -> "Запрашиваемый endpoint не найден (HTTP 404). Проверь маршрут C# API."
+            409 -> "$fallback: такая запись уже существует (HTTP 409)."
+            422 -> "$fallback: сервер отклонил формат данных (HTTP 422)."
+            429 -> "Слишком много запросов. Подожди и попробуй ещё раз."
+            in 500..599 -> "Ошибка сервера (${result.status}). Проверь журнал C# API."
+            else -> "$fallback (HTTP ${result.status})."
+        }
 
     private fun parseFieldErrors(errors: JSONObject?): Map<String, List<String>> {
         if (errors == null) return emptyMap()
@@ -229,6 +287,12 @@ object AuthApi {
         return parsed
     }
 
+    private fun fieldErrors(result: HttpResult): Map<String, List<String>> {
+        val json = result.json() ?: return emptyMap()
+        return parseFieldErrors(json.optJSONObject("errors") ?: json.optJSONObject("fieldErrors")
+            ?: json.optJSONObject("field_errors") ?: json.optJSONObject("data")?.optJSONObject("errors"))
+    }
+
     private fun networkErrorMessage(error: Exception): String = when (error) {
         is UnknownHostException -> "Не удалось найти сервер. Проверь адрес API и подключение к сети."
         is SocketTimeoutException -> "Сервер не ответил вовремя. Попробуй ещё раз."
@@ -237,7 +301,14 @@ object AuthApi {
         else -> "Ошибка запроса: ${error.localizedMessage ?: error.javaClass.simpleName}"
     }
 
-    /** POST /api/auth/email-confirm — отправка кода для подтверждения почты. */
+    private fun recoveryIdentityKey(value: String): String = when (value.lowercase()) {
+        "login", "nickname", "username" -> "login"
+        "email", "почта" -> "email"
+        "phone", "телефон" -> "phone"
+        else -> throw IllegalArgumentException("Для восстановления укажи login, email или phone.")
+    }
+
+    /** POST /api/auth/email-confirm. */
     fun requestEmailConfirmation(baseUrl: String, login: String, email: String): EmailConfirmationApiResult = try {
         require(login.isNotBlank()) { "Введите имя пользователя." }
         require(email.isNotBlank()) { "Введите адрес электронной почты." }
@@ -247,47 +318,65 @@ object AuthApi {
             payload = JSONObject().put("login", login.trim()).put("email", email.trim())
         )
         if (result.status in 200..299) EmailConfirmationApiResult.Success(result.status)
-        else EmailConfirmationApiResult.Failure(
-            result.status,
-            serverMessage(result, "Сервер не смог отправить код подтверждения"),
-            parseFieldErrors(result.json()?.optJSONObject("errors"))
-        )
+        else EmailConfirmationApiResult.Failure(result.status, serverMessage(result, "Сервер не смог отправить код подтверждения"), fieldErrors(result))
     } catch (error: Exception) {
         EmailConfirmationApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST /api/auth/register. The confirmation field is `emailCode` (not `code`). */
+    /**
+     * POST /register returns refreshToken only. The client immediately exchanges it at
+     * POST /refresh and only reports success after a JWT is received.
+     */
     fun register(baseUrl: String, registration: RegisterRequest): RegisterApiResult = try {
+        require(registration.login.isNotBlank()) { "Введите логин." }
+        require(registration.email.isNotBlank()) { "Введите почту." }
+        require(registration.password.length >= 8) { "Пароль должен содержать не менее 8 символов." }
+        require(registration.emailCode.isNotBlank()) { "Введите код подтверждения почты." }
         val payload = JSONObject().apply {
             put("login", registration.login.trim())
             put("email", registration.email.trim())
-            put("password", registration.password)
             put("emailCode", registration.emailCode.trim())
+            put("password", registration.password)
             registration.phone?.trim()?.takeIf { it.isNotEmpty() }?.let { put("phone", it) }
         }
         val result = request(baseUrl, AuthEndpoints.REGISTER, payload = payload)
-        if (result.status in 200..299) {
-            val token = accessToken(result)
-            if (token.isNullOrBlank()) {
-                RegisterApiResult.Failure(result.status, "Регистрация прошла, но сервер не вернул accessToken.")
-            } else {
-                RegisterApiResult.Success(token, refreshToken(result), result.status)
-            }
+        if (result.status !in 200..299) {
+            RegisterApiResult.Failure(result.status, serverMessage(result, "Сервер отклонил регистрацию"), fieldErrors(result))
         } else {
-            RegisterApiResult.Failure(
-                result.status,
-                serverMessage(result, "Сервер отклонил регистрацию"),
-                parseFieldErrors(result.json()?.optJSONObject("errors"))
-            )
+            val receivedRefresh = refreshToken(result)
+            if (receivedRefresh.isNullOrBlank()) {
+                RegisterApiResult.Failure(
+                    result.status,
+                    "Сервер создал аккаунт, но ответ /api/auth/register не содержит refreshToken. Нужен refreshToken в успешном ответе backend.",
+                    accountCreated = true
+                )
+            } else {
+                when (val refreshed = refreshAccessToken(baseUrl, receivedRefresh)) {
+                    is RefreshTokenApiResult.Success -> RegisterApiResult.Success(
+                        refreshed.accessToken,
+                        refreshed.refreshToken,
+                        result.status
+                    )
+                    is RefreshTokenApiResult.Failure -> RegisterApiResult.Failure(
+                        refreshed.httpStatus,
+                        "Аккаунт создан, но получить JWT через /api/auth/refresh не удалось. ${refreshed.message} Попробуй войти позже; повторно регистрироваться не нужно.",
+                        accountCreated = true
+                    )
+                }
+            }
         }
     } catch (error: Exception) {
         RegisterApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST /api/auth/login. Exactly one identifier property is included in the body. */
+    /**
+     * POST /login accepts exactly one identifier property and returns refreshToken.
+     * The following refresh exchange returns the JWT needed by protected endpoints.
+     */
     fun login(baseUrl: String, credentials: LoginApiRequest): LoginApiResult = try {
         val identifier = credentials.identifier.trim()
         require(identifier.isNotBlank()) { "Введите логин, почту или телефон." }
+        require(credentials.password.length >= 8) { "Пароль должен содержать не менее 8 символов." }
         val key = when {
             identifier.contains('@') -> "email"
             identifier.startsWith("+") ||
@@ -299,90 +388,109 @@ object AuthApi {
             AuthEndpoints.LOGIN,
             payload = JSONObject().put(key, identifier).put("password", credentials.password)
         )
-        if (result.status in 200..299) {
-            val token = accessToken(result)
-            if (token.isNullOrBlank()) LoginApiResult.Failure(result.status, "Сервер не вернул accessToken.")
-            else LoginApiResult.Success(token, refreshToken(result), result.status)
+        if (result.status !in 200..299) {
+            LoginApiResult.Failure(result.status, serverMessage(result, "Не удалось войти"), fieldErrors(result))
         } else {
-            LoginApiResult.Failure(
-                result.status,
-                serverMessage(result, "Не удалось войти"),
-                parseFieldErrors(result.json()?.optJSONObject("errors"))
-            )
+            val receivedRefresh = refreshToken(result)
+            if (receivedRefresh.isNullOrBlank()) {
+                LoginApiResult.Failure(
+                    result.status,
+                    "Сервер подтвердил вход, но ответ /api/auth/login не содержит refreshToken. Проверь контракт backend."
+                )
+            } else {
+                when (val refreshed = refreshAccessToken(baseUrl, receivedRefresh)) {
+                    is RefreshTokenApiResult.Success -> LoginApiResult.Success(
+                        refreshed.accessToken,
+                        refreshed.refreshToken,
+                        result.status
+                    )
+                    is RefreshTokenApiResult.Failure -> LoginApiResult.Failure(
+                        refreshed.httpStatus,
+                        "Вход принят, но получить JWT через /api/auth/refresh не удалось. ${refreshed.message}"
+                    )
+                }
+            }
         }
     } catch (error: Exception) {
         LoginApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /**
-     * Password recovery request. contactKind must be `nickname`, `email`, or `phone`.
-     * The backend returns `code_token`; it is kept only in memory until verification.
-     */
+    /** POST /forgot-password/request: exactly one of login/email/phone; response: codeToken. */
     fun requestPasswordReset(baseUrl: String, contactKind: String, identifier: String): PasswordRecoveryApiResult = try {
         require(identifier.isNotBlank()) { "Введите данные аккаунта." }
-        require(contactKind in setOf("nickname", "email", "phone")) { "Неизвестный тип контакта." }
+        val key = recoveryIdentityKey(contactKind)
         val result = request(
             baseUrl,
             AuthEndpoints.REQUEST_PASSWORD_RESET,
-            payload = JSONObject().put(contactKind, identifier.trim())
+            payload = JSONObject().put(key, identifier.trim())
         )
         if (result.status in 200..299) {
-            val json = result.json()
-            val codeToken = listOf("code_token", "codeToken")
-                .firstNotNullOfOrNull { key -> json?.optString(key)?.takeIf { it.isNotBlank() && it != "null" } }
-            PasswordRecoveryApiResult.Success(result.status, codeToken = codeToken)
+            val codeToken = findString(result.json(), setOf("codeToken"))
+            if (codeToken.isNullOrBlank()) {
+                PasswordRecoveryApiResult.Failure(result.status, "Сервер отправил ответ без codeToken.")
+            } else PasswordRecoveryApiResult.Success(result.status, codeToken = codeToken)
         } else PasswordRecoveryApiResult.Failure(result.status, serverMessage(result, "Не удалось отправить код восстановления"))
     } catch (error: Exception) {
         PasswordRecoveryApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST forgot-password/code with the exact code_token + verify_code fields. */
-    fun verifyPasswordResetCode(baseUrl: String, codeToken: String, verifyCode: String): PasswordRecoveryApiResult = try {
-        require(codeToken.isNotBlank()) { "Сервер не вернул code_token. Запросите код повторно." }
-        require(verifyCode.isNotBlank()) { "Введите код подтверждения." }
+    /** POST /forgot-password/code with identity + codeToken + emailCode. */
+    fun verifyPasswordResetCode(
+        baseUrl: String,
+        contactKind: String,
+        identifier: String,
+        codeToken: String,
+        emailCode: String
+    ): PasswordRecoveryApiResult = try {
+        require(identifier.isNotBlank()) { "Не найден логин, почта или телефон для восстановления." }
+        require(codeToken.isNotBlank()) { "Сервер не вернул codeToken. Запроси код повторно." }
+        require(emailCode.isNotBlank()) { "Введите код подтверждения." }
+        val key = recoveryIdentityKey(contactKind)
         val result = request(
             baseUrl,
             AuthEndpoints.VERIFY_PASSWORD_RESET_CODE,
-            payload = JSONObject().put("code_token", codeToken).put("verify_code", verifyCode.trim())
+            payload = JSONObject()
+                .put(key, identifier.trim())
+                .put("codeToken", codeToken)
+                .put("emailCode", emailCode.trim())
         )
         if (result.status in 200..299) {
-            val json = result.json()
-            val resetToken = listOf("reset_token", "resetToken", "password_reset_token", "passwordResetToken")
-                .firstNotNullOfOrNull { key -> json?.optString(key)?.takeIf { it.isNotBlank() && it != "null" } }
-            PasswordRecoveryApiResult.Success(result.status, codeToken = codeToken, resetToken = resetToken)
+            val resetToken = findString(result.json(), setOf("resetPasswordToken"))
+            if (resetToken.isNullOrBlank()) {
+                PasswordRecoveryApiResult.Failure(result.status, "Сервер не вернул resetPasswordToken после проверки кода.")
+            } else PasswordRecoveryApiResult.Success(result.status, codeToken = codeToken, resetToken = resetToken)
         } else PasswordRecoveryApiResult.Failure(result.status, serverMessage(result, "Код подтверждения не принят"))
     } catch (error: Exception) {
         PasswordRecoveryApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST forgot-password/reset; validated code data stays only in memory. */
+    /** POST /forgot-password/reset with identity + resetPasswordToken + newPassword. */
     fun resetPassword(
         baseUrl: String,
-        codeToken: String,
-        verifyCode: String,
-        newPassword: String,
-        resetToken: String? = null
+        contactKind: String,
+        identifier: String,
+        resetPasswordToken: String,
+        newPassword: String
     ): AuthActionApiResult = try {
-        require(codeToken.isNotBlank()) { "code_token не найден. Запросите код восстановления повторно." }
-        require(verifyCode.isNotBlank()) { "Код подтверждения не найден. Пройдите проверку ещё раз." }
+        require(identifier.isNotBlank()) { "Не найден логин, почта или телефон для восстановления." }
+        require(resetPasswordToken.isNotBlank()) { "Токен сброса пароля не найден. Проверь код ещё раз." }
         require(newPassword.length >= 8) { "Пароль должен содержать не менее 8 символов." }
+        val key = recoveryIdentityKey(contactKind)
         val payload = JSONObject()
-            .put("code_token", codeToken)
-            .put("verify_code", verifyCode.trim())
-            .put("new_password", newPassword)
-        resetToken?.takeIf { it.isNotBlank() }?.let { payload.put("reset_token", it) }
-        val result = request(
-            baseUrl,
-            AuthEndpoints.RESET_PASSWORD,
-            payload = payload
-        )
+            .put(key, identifier.trim())
+            .put("resetPasswordToken", resetPasswordToken)
+            .put("newPassword", newPassword)
+        val result = request(baseUrl, AuthEndpoints.RESET_PASSWORD, payload = payload)
         if (result.status in 200..299) AuthActionApiResult.Success(result.status)
         else AuthActionApiResult.Failure(result.status, serverMessage(result, "Не удалось изменить пароль"))
     } catch (error: Exception) {
         AuthActionApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST /api/auth/refresh using the long-lived refresh token. */
+    /**
+     * POST /api/auth/refresh. Request: { refreshToken }. The documented response is
+     * { jwt, refreshToken }; the old refresh token is retained only if the server omits rotation.
+     */
     fun refreshAccessToken(baseUrl: String, refreshTokenValue: String): RefreshTokenApiResult = try {
         require(refreshTokenValue.isNotBlank()) { "Refresh-токен не найден." }
         val result = request(
@@ -391,135 +499,180 @@ object AuthApi {
             payload = JSONObject().put("refreshToken", refreshTokenValue)
         )
         if (result.status in 200..299) {
-            val access = accessToken(result)
-            if (access.isNullOrBlank()) RefreshTokenApiResult.Failure(result.status, "Сервер не вернул новый accessToken.")
-            else RefreshTokenApiResult.Success(access, refreshToken(result) ?: refreshTokenValue, result.status)
+            val jwt = accessToken(result)
+            val rotatedRefresh = refreshToken(result)
+            if (jwt.isNullOrBlank() || rotatedRefresh.isNullOrBlank()) {
+                val missing = buildList {
+                    if (jwt.isNullOrBlank()) add("jwt")
+                    if (rotatedRefresh.isNullOrBlank()) add("refreshToken")
+                }.joinToString(" и ")
+                RefreshTokenApiResult.Failure(
+                    result.status,
+                    "POST /api/auth/refresh вернул успешный статус, но в JSON отсутствует поле $missing. По контракту backend должен возвращать jwt и новый refreshToken."
+                )
+            } else {
+                RefreshTokenApiResult.Success(jwt, rotatedRefresh, result.status)
+            }
         } else RefreshTokenApiResult.Failure(result.status, serverMessage(result, "Не удалось обновить сессию"))
     } catch (error: Exception) {
         RefreshTokenApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** POST /api/auth/logout with bearer access token. */
-    fun logout(baseUrl: String, accessToken: String, refreshToken: String?): AuthActionApiResult = try {
-        val payload = JSONObject().apply {
-            refreshToken?.takeIf { it.isNotBlank() }?.let { put("refreshToken", it) }
+
+    /** Reuses a just-rotated token if several requests receive 401 concurrently. */
+    private fun refreshTokenSafely(baseUrl: String, oldRefreshToken: String): RefreshTokenApiResult = synchronized(refreshLock) {
+        val cached = lastRefreshResult
+        val cacheIsFresh = System.currentTimeMillis() - lastRefreshAtMillis < 30_000L
+        if (lastRefreshSourceToken == oldRefreshToken && cached != null && cacheIsFresh) {
+            return@synchronized cached
         }
-        val result = request(
+        when (val refreshed = refreshAccessToken(baseUrl, oldRefreshToken)) {
+            is RefreshTokenApiResult.Success -> {
+                lastRefreshSourceToken = oldRefreshToken
+                lastRefreshResult = refreshed
+                lastRefreshAtMillis = System.currentTimeMillis()
+                refreshed
+            }
+            is RefreshTokenApiResult.Failure -> {
+                lastRefreshSourceToken = null
+                lastRefreshResult = null
+                lastRefreshAtMillis = 0L
+                refreshed
+            }
+        }
+    }
+
+    /** Sends an authenticated request; on 401 refreshes once and retries the original request. */
+    private fun requestAuthorized(
+        baseUrl: String,
+        path: String,
+        method: String,
+        payload: JSONObject?,
+        accessTokenValue: String,
+        storedRefreshToken: String?
+    ): AuthorizedHttpResult {
+        var response = request(baseUrl, path, method, payload, accessTokenValue)
+        if (response.status != 401 || storedRefreshToken.isNullOrBlank()) {
+            return AuthorizedHttpResult(response)
+        }
+
+        when (val refreshed = refreshTokenSafely(baseUrl, storedRefreshToken)) {
+            is RefreshTokenApiResult.Success -> {
+                // Logout must send the rotated refresh token on its retried request.
+                val retryPayload = if (path == AuthEndpoints.LOGOUT) {
+                    JSONObject().put("refreshToken", refreshed.refreshToken)
+                } else payload
+                response = request(baseUrl, path, method, retryPayload, refreshed.accessToken)
+                return AuthorizedHttpResult(
+                    response,
+                    renewedAccessToken = refreshed.accessToken,
+                    renewedRefreshToken = refreshed.refreshToken
+                )
+            }
+            is RefreshTokenApiResult.Failure -> return AuthorizedHttpResult(
+                response.copy(status = refreshed.httpStatus ?: 503),
+                refreshError = "Не удалось обновить сессию после HTTP 401. ${refreshed.message}"
+            )
+        }
+    }
+
+    /** POST /api/auth/logout with JWT in Authorization and refreshToken in JSON. */
+    fun logout(baseUrl: String, accessToken: String, refreshToken: String?): AuthActionApiResult = try {
+        require(!refreshToken.isNullOrBlank()) { "Refresh-токен не найден. Выполни вход заново." }
+        val payload = JSONObject().put("refreshToken", refreshToken)
+        val result = requestAuthorized(
             baseUrl,
             AuthEndpoints.LOGOUT,
+            method = "POST",
             payload = payload,
-            bearerToken = accessToken
+            accessTokenValue = accessToken,
+            storedRefreshToken = refreshToken
         )
-        if (result.status in 200..299 || result.status == 401) AuthActionApiResult.Success(result.status)
-        else AuthActionApiResult.Failure(result.status, serverMessage(result, "Не удалось завершить сессию на сервере"))
+        if (result.response.status in 200..299) {
+            AuthActionApiResult.Success(result.response.status, result.renewedAccessToken, result.renewedRefreshToken)
+        } else {
+            AuthActionApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось завершить сессию на сервере"),
+                result.renewedAccessToken,
+                result.renewedRefreshToken
+            )
+        }
     } catch (error: Exception) {
         AuthActionApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** GET /api/users/me. If access token expired, try refresh once and repeat the request. */
+    /** GET /api/users/me with automatic refresh + one retry after HTTP 401. */
     fun getCurrentUserName(
         baseUrl: String,
         jwt: String,
         storedRefreshToken: String? = null
-    ): CurrentUserApiResult {
-        return try {
-            var activeAccessToken = jwt
-            var renewedAccess: String? = null
-            var renewedRefresh: String? = null
-            var result = request(baseUrl, AuthEndpoints.CURRENT_USER, method = "GET", bearerToken = activeAccessToken)
-            if (result.status == 401 && !storedRefreshToken.isNullOrBlank()) {
-                when (val refreshed = refreshAccessToken(baseUrl, storedRefreshToken)) {
-                    is RefreshTokenApiResult.Success -> {
-                        activeAccessToken = refreshed.accessToken
-                        renewedAccess = refreshed.accessToken
-                        renewedRefresh = refreshed.refreshToken
-                        result = request(baseUrl, AuthEndpoints.CURRENT_USER, method = "GET", bearerToken = activeAccessToken)
-                    }
-                    is RefreshTokenApiResult.Failure -> return CurrentUserApiResult.Failure(
-                        refreshed.httpStatus,
-                        "Сессия истекла. ${refreshed.message}"
-                    )
-                }
-            }
-            if (result.status !in 200..299) {
-                CurrentUserApiResult.Failure(result.status, serverMessage(result, "Не удалось получить профиль"))
-            } else {
-                val json = result.json()
-                if (json == null) {
-                    CurrentUserApiResult.Failure(result.status, "Сервер вернул пустой или некорректный JSON профиля.")
-                } else {
-                    val profile = parseUserProfile(json)
-                    CurrentUserApiResult.Success(profile, result.status, renewedAccess, renewedRefresh)
-                }
-            }
-        } catch (error: Exception) {
-            CurrentUserApiResult.Failure(null, networkErrorMessage(error))
+    ): CurrentUserApiResult = try {
+        val result = requestAuthorized(
+            baseUrl,
+            AuthEndpoints.CURRENT_USER,
+            method = "GET",
+            payload = null,
+            accessTokenValue = jwt,
+            storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status !in 200..299) {
+            CurrentUserApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось получить профиль"),
+                result.renewedAccessToken,
+                result.renewedRefreshToken
+            )
+        } else {
+            val json = result.response.json()
+            if (json == null) CurrentUserApiResult.Failure(result.response.status, "Сервер вернул пустой или некорректный JSON профиля.", result.renewedAccessToken, result.renewedRefreshToken)
+            else CurrentUserApiResult.Success(parseUserProfile(json), result.response.status, result.renewedAccessToken, result.renewedRefreshToken)
         }
+    } catch (error: Exception) {
+        CurrentUserApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /**
-     * PUT /api/users/me. The endpoint is kept separate from the UI so the DTO can be
-     * aligned with the backend contract without changing Compose screens.
-     */
+    /** PUT /api/users/me. This user-profile route/DTO is outside the 02.11 auth specification. */
     fun updateCurrentUserProfile(
         baseUrl: String,
         accessTokenValue: String,
         profile: UserProfile,
         storedRefreshToken: String? = null
-    ): AuthActionApiResult {
-        return try {
-            require(accessTokenValue.isNotBlank()) { "Сначала войдите в приложение." }
-            val payload = JSONObject().apply {
-                put("login", profile.login)
-                put("email", profile.email)
-                put("phone", profile.phone)
-                put("fullName", profile.fullName)
-                put("birthDate", profile.birthDate)
-                put("height", profile.height)
-                put("weight", profile.weight)
-                put("gender", profile.gender)
-            }
-            var activeAccessToken = accessTokenValue
-            var renewedAccessToken: String? = null
-            var renewedRefreshToken: String? = null
-            var result = request(
-                baseUrl,
-                AuthEndpoints.UPDATE_CURRENT_USER,
-                method = "PUT",
-                payload = payload,
-                bearerToken = activeAccessToken
-            )
-            if (result.status == 401 && !storedRefreshToken.isNullOrBlank()) {
-                when (val refreshed = refreshAccessToken(baseUrl, storedRefreshToken)) {
-                    is RefreshTokenApiResult.Success -> {
-                        activeAccessToken = refreshed.accessToken
-                        renewedAccessToken = refreshed.accessToken
-                        renewedRefreshToken = refreshed.refreshToken
-                        result = request(
-                            baseUrl,
-                            AuthEndpoints.UPDATE_CURRENT_USER,
-                            method = "PUT",
-                            payload = payload,
-                            bearerToken = activeAccessToken
-                        )
-                    }
-                    is RefreshTokenApiResult.Failure -> return AuthActionApiResult.Failure(
-                        refreshed.httpStatus,
-                        "Сессия истекла. ${refreshed.message}"
-                    )
-                }
-            }
-            if (result.status in 200..299) {
-                AuthActionApiResult.Success(result.status, renewedAccessToken, renewedRefreshToken)
-            } else {
-                AuthActionApiResult.Failure(result.status, serverMessage(result, "Не удалось сохранить профиль"))
-            }
-        } catch (error: Exception) {
-            AuthActionApiResult.Failure(null, networkErrorMessage(error))
+    ): AuthActionApiResult = try {
+        require(accessTokenValue.isNotBlank()) { "Сначала войдите в приложение." }
+        val payload = JSONObject().apply {
+            put("login", profile.login)
+            put("email", profile.email)
+            put("phone", profile.phone)
+            put("fullName", profile.fullName)
+            put("birthDate", profile.birthDate)
+            put("height", profile.height)
+            put("weight", profile.weight)
+            put("gender", profile.gender)
         }
+        val result = requestAuthorized(
+            baseUrl,
+            AuthEndpoints.UPDATE_CURRENT_USER,
+            method = "PUT",
+            payload = payload,
+            accessTokenValue = accessTokenValue,
+            storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status in 200..299) {
+            AuthActionApiResult.Success(result.response.status, result.renewedAccessToken, result.renewedRefreshToken)
+        } else {
+            AuthActionApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось сохранить профиль"),
+                result.renewedAccessToken,
+                result.renewedRefreshToken
+            )
+        }
+    } catch (error: Exception) {
+        AuthActionApiResult.Failure(null, networkErrorMessage(error))
     }
-    private fun parseUserProfile(root: JSONObject?): UserProfile {
-        if (root == null) return UserProfile()
+
+    private fun parseUserProfile(root: JSONObject): UserProfile {
         val data = root.optJSONObject("data") ?: root
         val user = data.optJSONObject("user") ?: root.optJSONObject("user") ?: data
         val profile = user.optJSONObject("profile") ?: data.optJSONObject("profile")

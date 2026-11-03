@@ -15,7 +15,7 @@ Android-приложение на Kotlin и Jetpack Compose. V2 — отдель
 - Регистрация с подтверждением почты через `/api/auth/email-confirm` и `/api/auth/register`.
 - Вход по nickname/login, email или телефону через `/api/auth/login`.
 - Раздельное хранение access token и refresh token.
-- Обновление access token при `401` на запросе `GET /api/users/me`.
+- Обновление JWT при `401` на подключённых защищённых запросах: `GET /api/users/me`, `PUT /api/users/me`, `POST /api/auth/logout` (refresh + один повтор исходного запроса).
 - Запрос кода восстановления, проверка кода и установка нового пароля через клиентский API.
 - Серверный logout с последующей очисткой локальных токенов.
 - Анкета пользователя, главный экран, список тренировок и административный каталог упражнений.
@@ -24,13 +24,13 @@ Android-приложение на Kotlin и Jetpack Compose. V2 — отдель
 
 На стартовом экране доступна настройка базового URL. Для Android Emulator и сервера на том же компьютере обычно используется `http://10.0.2.2:5000`. Для физического устройства нужен доступный телефону LAN-IP или HTTPS URL.
 
-Подтверждённые изменения от 02.11: endpoint подтверждения почты `/api/auth/email-confirm`, поле кода в JSON регистрации — `emailCode`. Точные URL и DTO операций forgot-password, refresh и logout в исходном архиве полностью не описаны. Клиентские значения вынесены в `AuthEndpoints`; их нужно сверить с C# backend. Подробности и примеры JSON — в `README_SERVER_API_RU.md`.
+Клиент обновлён под техническое описание backend от 02.11. После `/register` и `/login` ожидается `refreshToken`; затем приложение вызывает `/refresh` и получает `jwt` + новый `refreshToken`. DTO восстановления пароля и logout также приведены к camelCase-полям из документации. Подробные примеры и обязательные ответы backend — в `README_SERVER_API_RU.md`.
 
 ## Конфигурация
 
 - applicationId: `com.sportakus.auth.v2`
-- versionCode: `28`
-- versionName: `2.0.4-light`
+- versionCode: `31`
+- versionName: `2.0.7-light`
 - Android Gradle Plugin: `8.1.1`
 - Gradle: `8.0`
 - Kotlin: `1.9.0`
@@ -59,3 +59,8 @@ Android-приложение на Kotlin и Jetpack Compose. V2 — отдель
 ## Обновление 2.0.5-light
 
 Исправлены импорты Material Icons в `MainAppScreens.kt` и `PaddingValues` в `OnboardingScreens.kt`. Подробности: `README_UPDATE_2.0.5_RU.md`.
+
+
+## Обновление 2.0.7-light — backend auth contract от 02.11
+
+Регистрация и вход больше не требуют access token в ответе `/register` или `/login`: клиент читает `refreshToken` и автоматически обменивает его через `/api/auth/refresh` на `jwt` и ротированный `refreshToken`. DTO восстановления пароля приведены к `login/email/phone`, `codeToken`, `emailCode`, `resetPasswordToken`, `newPassword`. Добавлен общий механизм refresh + повтор запроса после 401 для подключённых защищённых методов. См. `README_UPDATE_2.0.7_RU.md` и `README_SERVER_API_RU.md`.

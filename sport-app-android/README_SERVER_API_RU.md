@@ -1,9 +1,11 @@
-# Интеграция Sportakus Android V2 с C# API
+# Sportakus Android V2 — контракт интеграции C# API
+
+Эта версия клиента выровнена по техническому описанию backend от 02.11. Ниже перечислены DTO, которые Android отправляет и ожидает.
 
 ## Регистрация и подтверждение почты
 
-1. Клиент проверяет данные формы локально.
-2. Для отправки кода вызывает `POST /api/auth/email-confirm`:
+1. Клиент проверяет поля локально: `login` обязателен; `email` должен иметь стандартный формат; пароль — **не менее 8 символов**; `phone` необязателен.
+2. Отправка кода: `POST /api/auth/email-confirm`.
 
 ```json
 {
@@ -12,7 +14,7 @@
 }
 ```
 
-3. После ввода шестизначного кода вызывает `POST /api/auth/register`:
+3. После ввода кода создание аккаунта: `POST /api/auth/register`.
 
 ```json
 {
@@ -24,11 +26,11 @@
 }
 ```
 
-`phone` необязателен и не добавляется в JSON, если поле пустое. Название поля кода строго `emailCode`, не `code`.
+`phone` исключается из JSON, если поле не заполнено. Имя поля кода — строго `emailCode`, не `code`.
 
-## Вход
+## Вход и получение JWT
 
-`POST /api/auth/login`. Клиент отправляет ровно одно поле идентификатора:
+`POST /api/auth/login` отправляет ровно одно поле идентификатора:
 
 ```json
 { "login": "Alice", "password": "strongPassword123" }
@@ -46,57 +48,130 @@
 { "phone": "+7 (999) 123-45-67", "password": "strongPassword123" }
 ```
 
-## Токены
+**Важно: `register` и `login` не должны возвращать access token/JWT. По новой схеме оба успешных endpoint возвращают `refreshToken`:**
 
-Успешные ответы входа и регистрации должны содержать краткоживущий access token и долгоживущий refresh token, например:
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+После этого Android автоматически вызывает `POST /api/auth/refresh`:
+
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+**Ожидаемый ответ `/api/auth/refresh`:**
 
 ```json
 {
-  "accessToken": "<access-token>",
-  "refreshToken": "<refresh-token>"
+  "jwt": "ThisIsJWT",
+  "refreshToken": "NewRefreshToken"
 }
 ```
 
-Клиент также распознаёт совместимые варианты `access_token`, `refresh_token` и старое поле `jwt`. Оба токена хранятся в `TokenStore`; `getJwt()` оставлен как совместимый псевдоним для получения access token.
+Клиент считает авторизацию завершённой только после получения обоих непустых полей `jwt` и `refreshToken`. Оба токена сохраняются в `TokenStore`; при каждом успешном refresh сохраняется ротированный `refreshToken`.
 
-Обновление сессии реализовано для `GET /api/users/me`: при `401` клиент вызывает `POST /api/auth/refresh` с `{ "refreshToken": "..." }`, сохраняет новые токены и один раз повторяет исходный запрос. Выход вызывает `POST /api/auth/logout` с заголовком `Authorization: Bearer <accessToken>` и необязательным `refreshToken` в JSON. Локальные токены удаляются независимо от результата сетевого logout.
+## Обновление сессии и повтор запросов
+
+Для защищённых запросов Android передаёт:
+
+```http
+Authorization: Bearer <jwt>
+```
+
+При HTTP `401 Unauthorized` клиент один раз вызывает `POST /api/auth/refresh` с текущим `refreshToken`, сохраняет `jwt` и новый `refreshToken`, затем повторяет исходный запрос. Если `/api/auth/refresh` вернул `401`, локальная сессия очищается и пользователь должен войти заново. Для одновременных `401` используется защита от параллельного повторного расходования одного refresh-токена.
+
+Сейчас в клиенте этот механизм применяется к авторизованным endpoint, которые уже подключены в Android: `GET /api/users/me`, `PUT /api/users/me` и `POST /api/auth/logout`. Новые защищённые endpoint нужно вызывать через тот же механизм `requestAuthorized`.
 
 ## Восстановление пароля
 
-Клиент поддерживает три типа идентификатора: почта, телефон и nickname. Текущие маршрутные значения вынесены в `AuthEndpoints` в `data/api/AuthApi.kt`:
+### 1. Запрос кода
 
-| Операция | Маршрут по умолчанию | JSON |
-|---|---|---|
-| Запрос кода | `POST /api/auth/forgot-password/request` | одно из полей `email`, `phone`, `nickname` |
-| Проверка кода | `POST /api/auth/forgot-password/code` | `code_token`, `verify_code` |
-| Установка нового пароля | `POST /api/auth/forgot-password/reset` | `code_token`, `verify_code`, `new_password`; если сервер вернул `reset_token`, он также передаётся |
+`POST /api/auth/forgot-password/request` — в запросе ровно одно поле идентификатора:
 
-Первый ответ ожидается с полем `code_token`; ответ проверки может дополнительно содержать `reset_token` (поддерживаются camelCase-варианты). Данные `code_token` и `verify_code` передаются и в финальном запросе смены пароля, чтобы поддержать серверный контракт, в котором повторная проверка выполняется на последнем шаге. Токены восстановления существуют только в состоянии приложения и не записываются в постоянное хранилище.
-
-**Важно:** в присланном архиве и доступной части технического описания от 02.11 точные URL и DTO для трёх операций восстановления, refresh и logout не были приведены полностью. Поэтому значения этих маршрутов и полей — текущие согласованные предположения клиента, а не подтверждённый серверный контракт. Если backend использует другие имена, достаточно изменить `AuthEndpoints` и соответствующие JSON-ключи в `AuthApi`.
-
-## Профиль
-
-После входа/регистрации тестовый экран может вызывать:
-
-```http
-GET /api/users/me
-Authorization: Bearer <accessToken>
-Accept: application/json
+```json
+{ "email": "alice@example.com" }
 ```
 
-Клиент извлекает личные данные из объекта ответа или вложенных `data`, `user`, `profile`. Поддерживаются поля `login`/`nickname`/`username`, `fullName`/`name`, `email`, `phone`, `birthDate`, `height`, `weight`, `gender`. Для статистики распознаются `totalWorkouts`, `sportCoins`/`balance`, `totalMinutes`, `favoriteCount` и массивы `activityValues`/`weeklyActivity` (включая snake_case варианты). Поля, которых нет в ответе, остаются пустыми или равными нулю; клиент не придумывает пользовательскую статистику.
+Вместо `email` может быть `login` или `phone`.
 
-Для телефона российский номер форматируется во время ввода и отправляется в формате `+7 (999) 999-99-99`. Этот формат используется также в полях входа, восстановления и редактирования профиля.
+Ответ:
 
-Сохранение редактируемого профиля пока предполагает `PUT /api/users/me` с полями `login`, `email`, `phone`, `fullName`, `birthDate`, `height`, `weight`, `gender`. Этот контракт не был подтверждён в предоставленном описании backend; перед реальным использованием согласуйте маршрут и DTO с C# разработчиком. Путь вынесен в `AuthEndpoints.UPDATE_CURRENT_USER`.
+```json
+{ "codeToken": "myCodeToken" }
+```
 
-## Настройка адреса
+### 2. Проверка кода
 
-В приложении откройте «Адрес сервера» и задайте базовый URL без `/api/...`:
+`POST /api/auth/forgot-password/code`:
+
+```json
+{
+  "email": "alice@example.com",
+  "codeToken": "myCodeToken",
+  "emailCode": "536093"
+}
+```
+
+Вместо `email` может быть одно поле `login` или `phone`.
+
+Ответ:
+
+```json
+{ "resetPasswordToken": "meResetPasswordToken" }
+```
+
+### 3. Установка нового пароля
+
+`POST /api/auth/forgot-password/reset`:
+
+```json
+{
+  "email": "alice@example.com",
+  "resetPasswordToken": "meResetPasswordToken",
+  "newPassword": "newPassword"
+}
+```
+
+Вместо `email` может быть одно поле `login` или `phone`. Пароль должен содержать не менее 8 символов. Клиент принимает пустое тело успешного ответа.
+
+## Logout
+
+`POST /api/auth/logout` отправляется с JWT в заголовке и refresh-токеном в теле:
+
+```http
+Authorization: Bearer <jwt>
+Content-Type: application/json
+```
+
+```json
+{ "refreshToken": "32CharRefreshToken" }
+```
+
+Успешный ответ может быть пустым. После запроса локальные токены удаляются.
+
+## Что backend обязан обеспечить
+
+Для работы после регистрации/входа без ошибки получения access token сервер должен:
+
+1. Возвращать HTTP 2xx и `{ "refreshToken": "..." }` из `/api/auth/register` и `/api/auth/login`.
+2. Принимать `{ "refreshToken": "..." }` в `/api/auth/refresh`.
+3. Возвращать из `/api/auth/refresh` оба поля: `jwt` и новый `refreshToken`.
+4. Возвращать HTTP 401 из `/api/auth/refresh`, если refresh-токен недействителен/истёк.
+5. Принимать logout с JWT в заголовке `Authorization: Bearer ...` и `refreshToken` в JSON.
+
+Если сервер уже реализует именно эти ответы, менять backend не требуется. Если `/register` или `/login` не возвращает refreshToken, либо `/refresh` не возвращает jwt, соответствующую часть backend нужно исправить: получить JWT только на стороне Android без серверной выдачи невозможно.
+
+## Профиль — отдельно от auth-контракта
+
+Профиль запрашивается через `GET /api/users/me` с JWT. Сохранение профиля в этой версии всё ещё предполагает `PUT /api/users/me` и DTO `login`, `email`, `phone`, `fullName`, `birthDate`, `height`, `weight`, `gender`. Эти пользовательские endpoints и DTO не перечислены в техническом описании auth от 02.11 — их следует сверить отдельно с backend-разработчиком.
+
+## Настройка адреса сервера
+
+В приложении открой «Адрес сервера» и укажи базовый URL без `/api/...`:
 
 - Android Emulator: обычно `http://10.0.2.2:5000`;
 - физический телефон в той же Wi-Fi сети: `http://<LAN-IP-компьютера>:<порт>`;
 - другая сеть: публичный HTTPS URL или HTTPS-туннель.
 
-`http://` разрешён в этой учебной сборке для локального тестирования. Для реального размещения используйте HTTPS и защищённое хранилище токенов на основе Android Keystore.
+Для production используй HTTPS и защищённое хранилище токенов на основе Android Keystore.
