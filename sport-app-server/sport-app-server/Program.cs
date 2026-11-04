@@ -1,21 +1,11 @@
-
-using BCrypt.Net;
 using DotNetEnv;
-using MailKit.Net.Smtp;
-using MailKit.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.Win32;
-using MimeKit;
-using Npgsql;
-using Org.BouncyCastle.Asn1.Ocsp;
 using sport_app_server.Models;
 using System.IdentityModel.Tokens.Jwt;
-using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text;
 
@@ -221,38 +211,49 @@ namespace sport_app_server
                     errors["authorisation"] = new[] { "Пользователя с такими данными не существует" };
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
-
-                string refreshToken = Tools.GenerateToken(32);
-                RefreshToken newRefreshToken = new RefreshToken
+                if (currentUser != null)
                 {
-                    Id = Guid.NewGuid(),
-                    UserId = currentUser.Id,
-                    TokenHash = Tools.HashString(refreshToken),
-                    ExpiresAt = DateTime.UtcNow.AddDays(30),
-                    Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
-                    CreatedAt = DateTime.UtcNow,
-                    Ip = httpContext.Connection.RemoteIpAddress,
-                    User = currentUser
-                };
-                db.RefreshTokens.Add(newRefreshToken);
-                await db.SaveChangesAsync();
+                    string refreshToken = Tools.GenerateToken(32);
+                    RefreshToken newRefreshToken = new RefreshToken
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = currentUser.Id,
+                        TokenHash = Tools.HashString(refreshToken),
+                        ExpiresAt = DateTime.UtcNow.AddDays(30),
+                        Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
+                        CreatedAt = DateTime.UtcNow,
+                        Ip = httpContext.Connection.RemoteIpAddress,
+                        User = currentUser
+                    };
+                    db.RefreshTokens.Add(newRefreshToken);
+                    await db.SaveChangesAsync();
 
-                LoginAnswer loginAnswer = new LoginAnswer(refreshToken);
-                return Results.Ok(loginAnswer);
+                    LoginAnswer loginAnswer = new LoginAnswer(refreshToken);
+                    return Results.Ok(loginAnswer);
+                }
+                return Results.InternalServerError();
             });
             app.MapGet("/api/users/me", async (ClaimsPrincipal user, sportappContext db) =>
             {
                 var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
-                return Results.Ok(new
+                
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                if (currentUser != null)
                 {
-                    login = currentUser.Login,
-                    phone = currentUser.PhoneNumber,
-                    email = currentUser.Email,
-                    createdAt = currentUser.CreatedAt,
-                    balance = currentUser.Balance,
-                    daysStraight = currentUser.DaysStraight
-                });
+                    return Results.Ok(new
+                    {
+                        login = currentUser.Login,
+                        phone = currentUser.PhoneNumber,
+                        email = currentUser.Email,
+                        createdAt = currentUser.CreatedAt,
+                        balance = currentUser.Balance,
+                        daysStraight = currentUser.DaysStraight
+                    });
+                }
+                else
+                {
+                    return Results.InternalServerError();
+                }
             }).RequireAuthorization();
             app.MapPost("/api/auth/email-confirm", async ([FromBody] EmailConfirmRequest request, sportappContext db, IMemoryCache cache) =>
             {
@@ -321,6 +322,9 @@ namespace sport_app_server
 
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
+
+                if (currentUser == null)
+                    return Results.InternalServerError();
 
                 string token = Tools.GenerateToken(32);
                 string cacheKey = $"code_token_{token}_{currentUser.Login}";
@@ -393,6 +397,9 @@ namespace sport_app_server
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
+                if (currentUser == null)
+                    return Results.InternalServerError();
+
                 string resetToken = Tools.GenerateToken(32);
                 string tokenHash = BCrypt.Net.BCrypt.HashPassword(resetToken, workFactor: 12);
                 string resetTokenCacheKey = $"password_reset_{currentUser.Login}";
@@ -457,6 +464,9 @@ namespace sport_app_server
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
+                if (currentUser == null)
+                    return Results.InternalServerError();
+
                 currentUser.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
                 cache.Remove($"password_reset_{currentUser.Login}");
                 await db.SaveChangesAsync();
@@ -474,7 +484,7 @@ namespace sport_app_server
                 string hashedToken = Tools.HashString(request.RefreshToken);
                 User? user = null;
                 string device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown";
-                RefreshToken oldRefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken && rt.Device == device);
+                RefreshToken? oldRefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken && rt.Device == device);
                 if (oldRefreshToken == null)
                 {
                     return Results.Unauthorized();
@@ -498,6 +508,9 @@ namespace sport_app_server
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
+                if (oldRefreshToken == null)
+                    return Results.InternalServerError();
+
                 string jwt = GenerateJwtToken(user, secretKey, issuer, audience, jwtExpirationMinutes);
                 string newRefreshToken = Tools.GenerateToken(32);
                 RefreshToken NewRefreshToken = new RefreshToken
@@ -520,9 +533,9 @@ namespace sport_app_server
             app.MapPost("/api/auth/logout", async ([FromBody] LogoutRequest request, ClaimsPrincipal user, sportappContext db) =>
             {
                 string hashedToken = Tools.HashString(request.RefreshToken);
-                RefreshToken RefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken);
+                RefreshToken? RefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken);
                 var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                User currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
                 if (RefreshToken != null && currentUser != null && RefreshToken.RevokedAt == null && RefreshToken.UserId == currentUser.Id)
                 {
                     RefreshToken.RevokedAt = DateTime.UtcNow;
