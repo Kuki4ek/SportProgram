@@ -134,7 +134,7 @@ namespace sport_app_server
                     errors["email"] = new[] { "Код неверный" };
                 }
                 var users = await db.Users.ToListAsync();
-                int findLogin = (from user in users where user.Nickname == request.Login select user).Count();
+                int findLogin = (from user in users where user.Login == request.Login select user).Count();
                 if (findLogin != 0)
                 {
                     errors["login"] = new[] { "Регистрация невозможна, текущий логин занят" };
