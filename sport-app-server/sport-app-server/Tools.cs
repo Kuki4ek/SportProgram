@@ -32,7 +32,7 @@ namespace sport_app_server
                 return false;
             }
             string lowerCheckString = checkString.ToLower();
-            string commonChars = (letterCheck ? lettersChars : "") + (numericCheck ? numericChars : "") + (specialCheck ? specialChars : "") + (lowerBarCheck ? lowerBarChars : "";
+            string commonChars = (letterCheck ? lettersChars : "") + (numericCheck ? numericChars : "") + (specialCheck ? specialChars : "") + (lowerBarCheck ? lowerBarChars : "");
 
             foreach (char checkChar in lowerCheckString)
             {
