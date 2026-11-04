@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace sport_app_server
@@ -15,10 +16,43 @@ namespace sport_app_server
     }
     public static class Tools
     {
+        static string lettersChars = "abcdefghijklmnopqrstuvwxyz";
+        static string numericChars = "0123456789";
+        static string specialChars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~`";
+        static string lowerBarChars = "_";
         public static string HashString(string stringToHash)
         {
             var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(stringToHash));
             return Convert.ToBase64String(bytes);
+        }
+        public static bool CheckLatinNumericSpecial(string checkString, bool letterCheck = true, bool numericCheck = true, bool specialCheck = true, bool lowerBarCheck = true)
+        {
+            if (string.IsNullOrEmpty(checkString))
+            {
+                return false;
+            }
+            string lowerCheckString = checkString.ToLower();
+            string commonChars = (letterCheck ? lettersChars : "") + (numericCheck ? numericChars : "") + (specialCheck ? specialChars : "") + (lowerBarCheck ? lowerBarChars : "";
+
+            foreach (char checkChar in lowerCheckString)
+            {
+                if (!commonChars.Contains(checkChar))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        public static bool ContainsChar(string source, string chars)
+        {
+            if (string.IsNullOrEmpty(chars) || string.IsNullOrEmpty(source))
+                return false;
+            foreach (char checkChar in source)
+            {
+                if (chars.Contains(checkChar))
+                    return true;
+            }
+            return false;
         }
         public static CheckResult CheckLogin(string login)
         {
@@ -32,6 +66,16 @@ namespace sport_app_server
             {
                 checkResult.error = true;
                 checkResult.errorMessage = "Имя пользователя не должно быть длинее 50 символов";
+            }
+            else if (!CheckLatinNumericSpecial($"{login[0]}", numericCheck: false, specialCheck: false))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя должно начинаться с латинского символа или символа подчёркивания";
+            }
+            else if (!CheckLatinNumericSpecial(login, specialCheck: false))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя содержит недопустимые символы";
             }
             return checkResult;
         }
@@ -47,6 +91,31 @@ namespace sport_app_server
             {
                 checkResult.error = true;
                 checkResult.errorMessage = "Длина пароля должна быть не менее 8 символов";
+            }
+            else if (!CheckLatinNumericSpecial(password))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Пароль содержит недопустимые символы";
+            }
+            else if (!ContainsChar(password, lettersChars))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Пароль должен содержать как минимум один строчный символ";
+            }
+            else if (!ContainsChar(password, lettersChars.ToUpper()))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Пароль должен содержать как минимум один заглавный символ";
+            }
+            else if (!ContainsChar(password, numericChars))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Пароль должен содержать как минимум одну цифру";
+            }
+            else if (!ContainsChar(password, specialChars))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Пароль должен содержать как минимум один специальный символ";
             }
             return checkResult;
         }
@@ -127,7 +196,7 @@ namespace sport_app_server
         public static string GenerateToken(int length)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
-            string charSet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+            string charSet = lettersChars.ToUpper() + lettersChars + numericChars + specialChars;
             StringBuilder token = new StringBuilder();
             for (int i = 0; i < length; i++)
             {
