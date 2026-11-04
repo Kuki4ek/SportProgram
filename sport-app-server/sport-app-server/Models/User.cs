@@ -33,14 +33,6 @@ public partial class User
 
     public DateTime? StreakFreezeUsedAt { get; set; }
 
-    public string ActivityLevel { get; set; }
-
-    public string PreferredDuration { get; set; }
-
-    public int PreferredDaysPerWeek { get; set; }
-
-    public bool HasMedicalRestrictions { get; set; }
-
     public DateTime CreatedAt { get; set; }
 
     public virtual ICollection<Promocode> Promocodes { get; set; } = new List<Promocode>();
@@ -50,6 +42,10 @@ public partial class User
     public virtual ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 
     public virtual ICollection<UserAchievement> UserAchievements { get; set; } = new List<UserAchievement>();
+
+    public virtual ICollection<UserBodyMetric> UserBodyMetrics { get; set; } = new List<UserBodyMetric>();
+
+    public virtual ICollection<UserSurvey> UserSurveys { get; set; } = new List<UserSurvey>();
 
     public virtual ICollection<UserTask> UserTasks { get; set; } = new List<UserTask>();
 }

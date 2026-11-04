@@ -13,5 +13,9 @@ public partial class Tag
 
     public string Name { get; set; }
 
+    public virtual ICollection<UserSurvey> Surveys { get; set; } = new List<UserSurvey>();
+
+    public virtual ICollection<UserSurvey> SurveysNavigation { get; set; } = new List<UserSurvey>();
+
     public virtual ICollection<Task> Tasks { get; set; } = new List<Task>();
 }
