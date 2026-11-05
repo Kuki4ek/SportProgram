@@ -101,8 +101,8 @@ jobs:
       - name: Probe
         run: |
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/api/users/me || true)
-            [ "$code" = "401" ] && exit 0
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/health || true)
+            [ "$code" = "200" ] && exit 0
             sleep 2
           done
           docker compose -f sport-app-server/compose.yaml logs
