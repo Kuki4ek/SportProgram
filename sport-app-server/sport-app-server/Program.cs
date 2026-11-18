@@ -22,6 +22,8 @@ namespace sport_app_server
     public record RefreshTokenRequest(string RefreshToken);
     public record RefreshTokenAnswer(string JWT, string RefreshToken);
     public record LogoutRequest(string RefreshToken);
+    public record UserInfoChangeRequest(string? NewLogin, string? NewNickname, string? NewEmail, string? EmailCode, string? NewPhone, string? NewPassword, int? Weight, int? Height);
+    public record EmailChangeRequest(string NewEmail);
     public class Program
     {
         
@@ -541,6 +543,182 @@ namespace sport_app_server
                     RefreshToken.RevokedAt = DateTime.UtcNow;
                 }
                 await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPut("/api/users/me", async ([FromBody] UserInfoChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
+            {
+                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                if (currentUser == null)
+                {
+                    return Results.InternalServerError();
+                }
+                if (!string.IsNullOrEmpty(request.NewLogin))
+                {
+                    CheckResult loginCheck = Tools.CheckLogin(request.NewLogin);
+                    if (loginCheck.error)
+                    {
+                        errors["NewLogin"] = new[] { loginCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findLogin = (from findUser in users where findUser.Login == request.NewLogin select findUser).Count();
+                        if (findLogin > 0)
+                        {
+                            errors["NewLogin"] = new[] { "Текущий логин уже занят" };
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewNickname))
+                {
+                    CheckResult nicknameCheck = Tools.CheckNickname(request.NewNickname);
+                    if (nicknameCheck.error)
+                    {
+                        errors["NewNickname"] = new[] { nicknameCheck.errorMessage };
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewEmail))
+                {
+                    CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
+                    if (emailCheck.error)
+                    {
+                        errors["NewEmail"] = new[] { emailCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findEmail = (from findUser in users where findUser.Email == request.NewEmail select findUser).Count();
+                        if (findEmail > 0)
+                        {
+                            errors["NewEmail"] = new[] { "Текущая почта уже занята" };
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewPhone))
+                {
+                    CheckResult phoneCheck = Tools.CheckPhone(request.NewPhone);
+                    if (phoneCheck.error)
+                    {
+                        errors["NewPhone"] = new[] { phoneCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findPhone = (from findUser in users where findUser.PhoneNumber == request.NewPhone select findUser).Count();
+                        if (findPhone > 0)
+                        {
+                            errors["NewPhone"] = new[] { "Текущий номер уже занят" };
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewPassword))
+                {
+                    CheckResult passwordCheck = Tools.CheckPassword(request.NewPassword);
+                    if (passwordCheck.error)
+                    {
+                        errors["NewPassword"] = new[] { passwordCheck.errorMessage };
+                    }
+                }
+                if (request.Weight.HasValue)
+                {
+                    if (request.Weight.Value < 0 || request.Weight.Value > 700)
+                    {
+                        errors["Weight"] = new[] { "Вес находтся в недопустимом диапазоне" };
+                    }
+                }
+                if (request.Height.HasValue)
+                {
+                    if (request.Height.Value < 0 || request.Height.Value > 300)
+                    {
+                        errors["Height"] = new[] { "Рост находится в недопустимом диапазоне" };
+                    }
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                if (!string.IsNullOrEmpty(request.NewLogin))
+                {
+                    currentUser.Login = request.NewLogin;
+                }
+                if (!string.IsNullOrEmpty(request.NewNickname))
+                {
+                    currentUser.Nickname = request.NewNickname;
+                }
+                if (!string.IsNullOrEmpty(request.NewEmail))
+                {
+                    string cacheKey = $"email_confirm_{request.NewEmail}";
+                    string? codeHash = cache.Get<string>(cacheKey);
+                    if (string.IsNullOrEmpty(codeHash))
+                    {
+                        errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
+                    }
+                    else if (!string.IsNullOrEmpty(request.EmailCode) && !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                    {
+                        errors["email"] = new[] { "Код неверный" };
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewPhone))
+                {
+                    currentUser.PhoneNumber = request.NewPhone;
+                }
+                if (!string.IsNullOrEmpty(request.NewPassword))
+                {
+                    currentUser.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
+                }
+                
+                if (request.Weight.HasValue || request.Height.HasValue)
+                {
+                    List<UserBodyMetric> metrics = new List<UserBodyMetric>();
+                    metrics = await db.UserBodyMetrics
+                                        .Where(m => m.UserId == currentUser.Id)
+                                        .OrderByDescending(m => m.RecordedAt)
+                                        .ToListAsync();
+                    UserBodyMetric newMetrics = new();
+                    newMetrics.UserId = currentUser.Id;
+                    newMetrics.Height = request.Height.HasValue ? request.Height.Value : metrics[0].Height;
+                    newMetrics.Weight = request.Weight.HasValue ? request.Weight.Value : metrics[0].Weight;
+                    newMetrics.Source = "PROFILE";
+                    newMetrics.RecordedAt = DateTime.UtcNow;
+
+                    db.UserBodyMetrics.Add(newMetrics);
+                }
+
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPost("/api/users/me/email-confirm", async ([FromBody] EmailChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
+            {
+                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
+                CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                var users = await db.Users.ToListAsync();
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error)
+                {
+                    errors["email"] = new[] { emailCheck.errorMessage };
+                }
+                int findEmail = (from findUser in users where findUser.Email == request.NewEmail select findUser).Count();
+                if (findEmail > 0)
+                {
+                    errors["NewEmail"] = new[] { "Текущая почта уже занята" };
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                string code = Tools.GenerateCode();
+                string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
+                EmailData emailData = new EmailData("Подтверждение смены электронного адреса", EmailGenerator.GenerateCodeHTML(currentUser.Login, code));
+                if (EmailSender.SendEmail(currentUser.Login, request.NewEmail, emailData, emailKey).Result)
+                    cache.Set(cacheKey, codeHash, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+                    });
+                else
+                    return Results.InternalServerError();
+
                 return Results.Ok();
             }).RequireAuthorization();
             app.Run();
