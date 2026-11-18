@@ -78,6 +78,21 @@ namespace sport_app_server
             }
             return checkResult;
         }
+        public static CheckResult CheckNickname(string nickname)
+        {
+            CheckResult checkResult = new CheckResult();
+            if (string.IsNullOrWhiteSpace(nickname))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя не корректно";
+            }
+            else if (nickname.Length > 50)
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя должно быть не длиннее 50 символов";
+            }
+            return checkResult;
+        }
         public static CheckResult CheckPassword(string password)
         {
             CheckResult checkResult = new CheckResult();
