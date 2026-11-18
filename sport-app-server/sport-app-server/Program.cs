@@ -552,7 +552,7 @@ namespace sport_app_server
             {
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new Claim(ClaimTypes.Name, user.Login),
-                new Claim(ClaimTypes.Role, "user")
+                new Claim(ClaimTypes.Role, user.UserRole)
             };
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
