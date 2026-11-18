@@ -237,9 +237,12 @@ namespace sport_app_server
             });
             app.MapGet("/api/users/me", async (ClaimsPrincipal user, sportappContext db) =>
             {
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 if (currentUser != null)
                 {
                     return Results.Ok(new
@@ -534,10 +537,15 @@ namespace sport_app_server
             });
             app.MapPost("/api/auth/logout", async ([FromBody] LogoutRequest request, ClaimsPrincipal user, sportappContext db) =>
             {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 string hashedToken = Tools.HashString(request.RefreshToken);
                 RefreshToken? RefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken);
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
                 if (RefreshToken != null && currentUser != null && RefreshToken.RevokedAt == null && RefreshToken.UserId == currentUser.Id)
                 {
                     RefreshToken.RevokedAt = DateTime.UtcNow;
@@ -547,10 +555,13 @@ namespace sport_app_server
             }).RequireAuthorization();
             app.MapPut("/api/users/me", async ([FromBody] UserInfoChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
             {
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var errors = new Dictionary<string, string[]>();
                 var users = await db.Users.ToListAsync();
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 if (currentUser == null)
                 {
                     return Results.InternalServerError();
@@ -592,6 +603,19 @@ namespace sport_app_server
                         if (findEmail > 0)
                         {
                             errors["NewEmail"] = new[] { "Текущая почта уже занята" };
+                        }
+                        else
+                        {
+                            string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                            string? codeHash = cache.Get<string>(cacheKey);
+                            if (string.IsNullOrEmpty(codeHash))
+                            {
+                                errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
+                            }
+                            else if (string.IsNullOrEmpty(request.EmailCode) || !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                            {
+                                errors["email"] = new[] { "Код неверный" };
+                            }
                         }
                     }
                 }
@@ -647,16 +671,9 @@ namespace sport_app_server
                 }
                 if (!string.IsNullOrEmpty(request.NewEmail))
                 {
-                    string cacheKey = $"email_confirm_{request.NewEmail}";
-                    string? codeHash = cache.Get<string>(cacheKey);
-                    if (string.IsNullOrEmpty(codeHash))
-                    {
-                        errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
-                    }
-                    else if (!string.IsNullOrEmpty(request.EmailCode) && !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
-                    {
-                        errors["email"] = new[] { "Код неверный" };
-                    }
+                    currentUser.Email = request.NewEmail;
+                    string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                    cache.Remove(cacheKey);
                 }
                 if (!string.IsNullOrEmpty(request.NewPhone))
                 {
@@ -676,8 +693,13 @@ namespace sport_app_server
                                         .ToListAsync();
                     UserBodyMetric newMetrics = new();
                     newMetrics.UserId = currentUser.Id;
-                    newMetrics.Height = request.Height.HasValue ? request.Height.Value : metrics[0].Height;
-                    newMetrics.Weight = request.Weight.HasValue ? request.Weight.Value : metrics[0].Weight;
+                    if (metrics.Count > 0)
+                    {
+                        newMetrics.Height = metrics[0].Height;
+                        newMetrics.Weight = metrics[0].Weight;
+                    }
+                    newMetrics.Height = request.Height.HasValue ? request.Height.Value : newMetrics.Height;
+                    newMetrics.Weight = request.Weight.HasValue ? request.Weight.Value : newMetrics.Weight;
                     newMetrics.Source = "PROFILE";
                     newMetrics.RecordedAt = DateTime.UtcNow;
 
@@ -689,11 +711,14 @@ namespace sport_app_server
             }).RequireAuthorization();
             app.MapPost("/api/users/me/email-confirm", async ([FromBody] EmailChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
             {
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
-                var users = await db.Users.ToListAsync();
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+                CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
                 if (emailCheck.error)
                 {
                     errors["email"] = new[] { emailCheck.errorMessage };
