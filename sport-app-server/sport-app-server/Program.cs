@@ -24,6 +24,7 @@ namespace sport_app_server
     public record LogoutRequest(string RefreshToken);
     public record UserInfoChangeRequest(string? NewLogin, string? NewNickname, string? NewEmail, string? EmailCode, string? NewPhone, string? NewPassword, int? Weight, int? Height);
     public record EmailChangeRequest(string NewEmail);
+    public record PartnerRequest(string Name, string Logo, string ContactName, string ContactEmail, string ContactPhone);
     public class Program
     {
         
@@ -165,7 +166,6 @@ namespace sport_app_server
                     Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
                     CreatedAt = DateTime.UtcNow,
                     Ip = httpContext.Connection.RemoteIpAddress,
-                    // User = newUser
                 };
                 db.RefreshTokens.Add(newRefreshToken);
                 await db.SaveChangesAsync();
@@ -252,7 +252,8 @@ namespace sport_app_server
                         email = currentUser.Email,
                         createdAt = currentUser.CreatedAt,
                         balance = currentUser.Balance,
-                        daysStraight = currentUser.DaysStraight
+                        daysStraight = currentUser.DaysStraight,
+                        xpPoints = currentUser.XpPoints
                     });
                 }
                 else
@@ -746,6 +747,101 @@ namespace sport_app_server
 
                 return Results.Ok();
             }).RequireAuthorization();
+            app.MapGet("/api/partners", async (sportappContext db) =>
+            {
+                List<Partner> partners = await db.Partners.ToListAsync();
+                return Results.Ok(partners);
+            }).RequireAuthorization();
+            app.MapGet("/api/partners/{id:int}", async (int id, sportappContext db) =>
+            {
+                Partner? partner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (partner == null)
+                    return Results.NotFound();
+                return Results.Ok(partner);
+            }).RequireAuthorization();
+            app.MapPost("/api/partners", async (PartnerRequest request, sportappContext db) =>
+            {
+                CheckResult emailCheck = Tools.CheckEmail(request.ContactEmail);
+                CheckResult phoneCheck = Tools.CheckPhone(request.ContactPhone);
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error == true)
+                {
+                    errors["EmailCheck"] = new[] { emailCheck.errorMessage };
+                }
+                if (phoneCheck.error == true)
+                {
+                    errors["PhoneCheck"] = new[] { phoneCheck.errorMessage };
+                }
+                if (string.IsNullOrEmpty(request.Name))
+                {
+                    errors["Name"] = new[] { "Имя партнёра обязательно" };
+                }
+                if (string.IsNullOrEmpty(request.Logo))
+                {
+                    errors["Logo"] = new[] { "Логитип партнёра обязателен" };
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                Partner partner = new Partner();
+                partner.Name = request.Name;
+                partner.Logo = request.Logo;
+                partner.ContactName = request.ContactName;
+                partner.ContactEmail = request.ContactEmail;
+                partner.ContactPhone = request.ContactPhone;
+                db.Partners.Add(partner);
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapPut("/api/partners/{id:int}", async (int id, PartnerRequest request, sportappContext db) =>
+            {
+                
+                CheckResult emailCheck = Tools.CheckEmail(request.ContactEmail);
+                CheckResult phoneCheck = Tools.CheckPhone(request.ContactPhone);
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error == true)
+                {
+                    errors["EmailCheck"] = new[] { emailCheck.errorMessage };
+                }
+                if (phoneCheck.error == true)
+                {
+                    errors["PhoneCheck"] = new[] { phoneCheck.errorMessage };
+                }
+                if (string.IsNullOrEmpty(request.Name))
+                {
+                    errors["Name"] = new[] { "Имя партнёра обязательно" };
+                }
+                if (string.IsNullOrEmpty(request.Logo))
+                {
+                    errors["Logo"] = new[] { "Логитип партнёра обязателен" };
+                }
+                Partner? currentPartner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (currentPartner == null)
+                    return Results.NotFound();
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                currentPartner.Name = request.Name;
+                currentPartner.Logo = request.Logo;
+                currentPartner.ContactName = request.ContactName;
+                currentPartner.ContactEmail = request.ContactEmail;
+                currentPartner.ContactPhone = request.ContactPhone;
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapDelete("/api/partners/{id:int}", async (int id, sportappContext db) =>
+            {
+                var partner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (partner == null)
+                    return Results.NotFound();
+
+                db.Partners.Remove(partner);
+                await db.SaveChangesAsync();
+
+                return Results.NoContent();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
             app.Run();
         }
         
