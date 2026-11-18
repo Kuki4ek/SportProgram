@@ -647,7 +647,7 @@ namespace sport_app_server
                 {
                     if (request.Weight.Value < 0 || request.Weight.Value > 700)
                     {
-                        errors["Weight"] = new[] { "Вес находтся в недопустимом диапазоне" };
+                        errors["Weight"] = new[] { "Вес находится в недопустимом диапазоне" };
                     }
                 }
                 if (request.Height.HasValue)
