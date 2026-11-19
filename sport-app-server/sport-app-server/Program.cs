@@ -733,6 +733,8 @@ namespace sport_app_server
                 if (errors.Count > 0)
                     return Results.ValidationProblem(errors);
 
+                if (currentUser == null)
+                    return Results.InternalServerError();    
                 string cacheKey = $"email_change_confirm_{request.NewEmail}";
                 string code = Tools.GenerateCode();
                 string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
