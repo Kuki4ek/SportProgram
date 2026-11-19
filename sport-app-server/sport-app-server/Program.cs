@@ -245,15 +245,22 @@ namespace sport_app_server
                 User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 if (currentUser != null)
                 {
+                    var metrics = await db.UserBodyMetrics
+                                        .Where(m => m.UserId == currentUser.Id)
+                                        .OrderByDescending(m => m.RecordedAt)
+                                        .ToListAsync();
                     return Results.Ok(new
                     {
                         login = currentUser.Login,
+                        nickname = currentUser.Nickname,
                         phone = currentUser.PhoneNumber,
                         email = currentUser.Email,
                         createdAt = currentUser.CreatedAt,
                         balance = currentUser.Balance,
                         daysStraight = currentUser.DaysStraight,
-                        xpPoints = currentUser.XpPoints
+                        xpPoints = currentUser.XpPoints,
+                        weight = metrics.Count > 0 ? metrics[0].Weight : null,
+                        height = metrics.Count > 0 ? metrics[0].Height : null
                     });
                 }
                 else
