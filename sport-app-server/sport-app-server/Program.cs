@@ -896,6 +896,27 @@ namespace sport_app_server
                 }
                 return Results.Ok();
             }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapDelete("/api/tags/{id:int}", async (int id, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                Tag? tag = db.Tags.FirstOrDefault(t => t.Id == id);
+                if (tag == null)
+                {
+                    errors["Tag"] = new[] { "Тег не обнаружен" };
+                }
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+                if (tag != null)
+                {
+                    db.Tags.Remove(tag);
+                    await db.SaveChangesAsync();
+                }
+                else
+                {
+                    return Results.InternalServerError();
+                }
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
             app.Run();
         }
         
