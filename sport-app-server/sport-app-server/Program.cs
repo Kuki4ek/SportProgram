@@ -866,6 +866,36 @@ namespace sport_app_server
                 await db.SaveChangesAsync();
                 return Results.Ok();
             }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapPut("/api/tags/{id:int}", async (int id, [FromBody] TagsRequest request, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                Tag? tag = db.Tags.FirstOrDefault(t => t.Id == id);
+                if (tag == null)
+                {
+                    errors["Tag"] = new[] { "Тег не обнаружен" };
+                }
+                if (string.IsNullOrEmpty(request.Code) && request.Code.Length > 50)
+                {
+                    errors["Code"] = new[] { "Код некорректный" };
+                }
+                if (string.IsNullOrEmpty(request.Name) && request.Name.Length > 100)
+                {
+                    errors["Name"] = new[] { "Имя некорректно" };
+                }
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+                if (tag != null)
+                {
+                    tag.Code = request.Code;
+                    tag.Name = request.Name;
+                    await db.SaveChangesAsync();
+                }
+                else
+                {
+                    return Results.InternalServerError();
+                }
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
             app.Run();
         }
         
