@@ -1,35 +1,33 @@
 package com.sportakus.auth.ui.theme
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Single source of truth for semantic UI colors.
- * All of these values come from the exact Material color scheme rendered by
- * SportakusTheme, so text, inputs, and selected options cannot use a different
- * theme flag from their backgrounds.
+ * Stable palette for the light-only V2 application.
+ * These values intentionally do not depend on inherited Material content colors
+ * or runtime/system theme state, so text remains readable on every screen.
  */
 @Composable
-fun sportakusTextColor(): Color = MaterialTheme.colorScheme.onSurface
+fun sportakusTextColor(): Color = LightText
 
 @Composable
-fun sportakusSecondaryTextColor(): Color = MaterialTheme.colorScheme.onSurfaceVariant
+fun sportakusSecondaryTextColor(): Color = LightSecondaryText
 
 /** Selected questionnaire tiles match the theme's selected/brand container. */
 @Composable
-fun sportakusSelectedOptionBackground(): Color = MaterialTheme.colorScheme.primaryContainer
+fun sportakusSelectedOptionBackground(): Color = Color(0xFFEFF6DD)
 
 @Composable
-fun sportakusSelectedOptionTextColor(): Color = MaterialTheme.colorScheme.onPrimaryContainer
+fun sportakusSelectedOptionTextColor(): Color = LightText
 
-/** Editable fields use the surface-variant role in both themes. */
+/** Editable fields use the fixed white field surface in the light-only V2. */
 @Composable
-fun sportakusInputBackground(): Color = MaterialTheme.colorScheme.surfaceVariant
+fun sportakusInputBackground(): Color = LightField
 
 @Composable
-fun sportakusInputTextColor(): Color = MaterialTheme.colorScheme.onSurface
+fun sportakusInputTextColor(): Color = LightText
 
 /** Foreground for the solid primary action button. */
 @Composable
-fun sportakusPrimaryActionTextColor(): Color = MaterialTheme.colorScheme.onPrimary
+fun sportakusPrimaryActionTextColor(): Color = Color.White

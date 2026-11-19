@@ -42,6 +42,12 @@ import com.sportakus.auth.data.api.LoginApiResult
 import com.sportakus.auth.data.api.PasswordRecoveryApiResult
 import com.sportakus.auth.data.api.AuthActionApiResult
 import com.sportakus.auth.data.api.UserProfile
+import com.sportakus.auth.data.api.ProfileUpdateRequest
+import com.sportakus.auth.data.api.Partner
+import com.sportakus.auth.data.api.PartnerUpsertRequest
+import com.sportakus.auth.data.api.PartnerListApiResult
+import com.sportakus.auth.data.api.PartnerDetailsApiResult
+import com.sportakus.auth.data.api.PartnerMutationApiResult
 import com.sportakus.auth.data.api.CurrentUserApiResult
 import com.sportakus.auth.data.token.TokenStore
 import kotlinx.coroutines.Dispatchers
@@ -77,7 +83,10 @@ private enum class AuthDestination {
     MAIN_APP,
     WORKOUT_DETAIL,
     ADMIN_LIST,
-    ADMIN_EDITOR
+    ADMIN_EDITOR,
+    PARTNERS,
+    PARTNER_DETAILS,
+    PARTNER_EDITOR
 }
 
 @Composable
@@ -91,10 +100,18 @@ fun AuthApp() {
     // is sent to the intro cards and questionnaire.
     var destination by remember { mutableStateOf(AuthDestination.SPLASH) }
     var serverSettingsReturn by remember { mutableStateOf(AuthDestination.AUTH_WELCOME) }
-    var currentUserName by rememberSaveable { mutableStateOf(preferences.getString("profile_display_name", "") ?: "") }
+    // Profile display name now comes from the server nickname (or login/email fallback).
+    var currentUserName by rememberSaveable { mutableStateOf("") }
+    var profileSaving by remember { mutableStateOf(false) }
     var currentProfile by remember { mutableStateOf(UserProfile()) }
+    val partnerCatalog = remember { mutableStateListOf<Partner>() }
+    var selectedPartner by remember { mutableStateOf<Partner?>(null) }
+    var partnerLoading by remember { mutableStateOf(false) }
+    var partnerSaving by remember { mutableStateOf(false) }
+    var partnerMessage by remember { mutableStateOf<String?>(null) }
     var activeWorkoutTitle by rememberSaveable { mutableStateOf<String?>(null) }
     var activeWorkoutSeconds by rememberSaveable { mutableStateOf(0) }
+    var activeWorkoutPaused by rememberSaveable { mutableStateOf(false) }
     var currentAccountKey by rememberSaveable {
         mutableStateOf(preferences.getString("active_account_identity", "") ?: "")
     }
@@ -137,6 +154,58 @@ fun AuthApp() {
     // Shared UI message state must be declared before callbacks that capture it.
     var notice by remember { mutableStateOf<String?>(null) }
 
+    // A 401 after the automatic refresh attempt means the refresh token is no longer valid.
+    // Clear only the active session and route the user to authentication; account-local data remains.
+    val requireFreshLogin: (String) -> Unit = { message ->
+        TokenStore.clear(context)
+        isGuestSession = false
+        currentAccountKey = ""
+        currentProfile = UserProfile()
+        currentUserName = ""
+        activeWorkoutTitle = null
+        activeWorkoutSeconds = 0
+        activeWorkoutPaused = false
+        partnerCatalog.clear()
+        preferences.edit().remove("active_account_identity").apply()
+        destination = AuthDestination.LOGIN
+        notice = message.ifBlank { "Сессия истекла. Войди в аккаунт повторно." }
+    }
+
+    val loadPartners: () -> Unit = {
+        val jwt = TokenStore.getAccessToken(context)
+        val refresh = TokenStore.getRefreshToken(context)
+        if (jwt.isNullOrBlank()) {
+            partnerMessage = "Для просмотра партнёров необходимо войти в аккаунт."
+        } else {
+            partnerLoading = true
+            partnerMessage = null
+            coroutineScope.launch {
+                when (val result = withContext(Dispatchers.IO) {
+                    AuthApi.getPartners(serverBaseUrl, jwt, refresh)
+                }) {
+                    is PartnerListApiResult.Success -> {
+                        if (!result.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                        }
+                        partnerCatalog.clear()
+                        partnerCatalog.addAll(result.partners)
+                        partnerMessage = null
+                    }
+                    is PartnerListApiResult.Failure -> {
+                        if (!result.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                        }
+                        partnerMessage = result.message
+                        if (result.httpStatus == 401) {
+                            requireFreshLogin("Сессия партнёров истекла. Войди в аккаунт повторно.")
+                        }
+                    }
+                }
+                partnerLoading = false
+            }
+        }
+    }
+
     val loadCurrentProfile: () -> Unit = {
         val accessToken = TokenStore.getAccessToken(context)
         val refreshToken = TokenStore.getRefreshToken(context)
@@ -147,27 +216,20 @@ fun AuthApp() {
                 }) {
                     is CurrentUserApiResult.Success -> {
                         currentProfile = result.profile
-                        currentUserName = result.profile.displayName
+                        currentUserName = currentProfile.displayName
                         if (!result.renewedAccessToken.isNullOrBlank()) {
                             TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refreshToken)
                         }
-                        preferences.edit()
-                            .putString(profileDisplayNamePreferenceKey(currentAccountKey.ifBlank { "guest" }), currentUserName)
-                            .putString("profile_display_name", currentUserName)
-                            .apply()
                     }
                     is CurrentUserApiResult.Failure -> {
                         if (!result.renewedAccessToken.isNullOrBlank()) {
                             TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refreshToken)
                         }
                         // Do not manufacture profile data on API failure. Unknown fields stay blank/zero.
-                        currentProfile = currentProfile.copy(
-                            login = currentProfile.login.ifBlank { currentUserName }
-                        )
+                        currentUserName = currentProfile.displayName
                         notice = result.message
                         if (result.httpStatus == 401) {
-                            TokenStore.clear(context)
-                            destination = AuthDestination.LOGIN
+                            requireFreshLogin("Сессия истекла. Войди в аккаунт повторно.")
                         }
                     }
                 }
@@ -175,10 +237,11 @@ fun AuthApp() {
         }
     }
 
-    LaunchedEffect(activeWorkoutTitle) {
+    LaunchedEffect(activeWorkoutTitle, activeWorkoutPaused) {
         if (activeWorkoutTitle.isNullOrBlank()) {
             activeWorkoutSeconds = 0
-        } else {
+            activeWorkoutPaused = false
+        } else if (!activeWorkoutPaused) {
             while (true) {
                 delay(1_000)
                 activeWorkoutSeconds += 1
@@ -272,8 +335,6 @@ fun AuthApp() {
             .putString("questionnaire_${answerSuffix}_formats", questionnaireFormats)
             .putString("questionnaire_${answerSuffix}_goals", questionnaireGoals)
             .putString("questionnaire_${answerSuffix}_medical", questionnaireMedical)
-            .putString(profileDisplayNamePreferenceKey(accountIdentity), currentUserName)
-            .putString("profile_display_name", currentUserName)
             .apply()
         destination = AuthDestination.MAIN_APP
     }
@@ -307,6 +368,9 @@ fun AuthApp() {
             AuthDestination.WORKOUT_DETAIL -> AuthDestination.MAIN_APP
             AuthDestination.ADMIN_LIST -> AuthDestination.MAIN_APP
             AuthDestination.ADMIN_EDITOR -> AuthDestination.ADMIN_LIST
+            AuthDestination.PARTNERS -> AuthDestination.MAIN_APP
+            AuthDestination.PARTNER_DETAILS -> AuthDestination.PARTNERS
+            AuthDestination.PARTNER_EDITOR -> AuthDestination.PARTNERS
         }
     }
 
@@ -315,11 +379,7 @@ fun AuthApp() {
         val loginError = registrationUsernameError(registrationLogin)
         val emailError = registrationEmailError(registrationEmail)
         val phoneError = registrationPhoneError(registrationPhone)
-        val passwordError = when {
-            registrationPassword.isBlank() -> "Пароль обязателен"
-            registrationPassword.length < 8 -> "Пароль должен содержать не менее 8 символов"
-            else -> null
-        }
+        val passwordError = passwordPolicyError(registrationPassword)
         val locallyValid = loginError == null && emailError == null && phoneError == null && passwordError == null
 
         // Step 1: validate locally and ask the server to send an email code.
@@ -358,8 +418,8 @@ fun AuthApp() {
     val submitLogin: () -> Unit = {
         when {
             loginIdentifier.isBlank() -> notice = "Введите логин, почту или телефон."
+            loginIdentifierError(loginIdentifier) != null -> notice = loginIdentifierError(loginIdentifier)
             loginPassword.isBlank() -> notice = "Введите пароль."
-            loginPassword.length < 8 -> notice = "Пароль должен содержать не менее 8 символов."
             loginSubmitting -> Unit
             else -> {
                 notice = null
@@ -385,11 +445,11 @@ fun AuthApp() {
                             currentAccountKey = preferences.getString(accountAliasPreferenceKey(loginIdentifier), null)
                                 ?: tokenIdentity
                             preferences.edit().putString("active_account_identity", currentAccountKey).apply()
-                            currentUserName = loginIdentifier.substringBefore('@').ifBlank { "Спортсмен" }
                             currentProfile = UserProfile(
                                 login = if (loginIdentifier.contains('@')) "" else loginIdentifier,
                                 email = loginIdentifier.takeIf { it.contains('@') }.orEmpty()
                             )
+                            currentUserName = currentProfile.displayName
                             loadCurrentProfile()
                             val questionnaireDone = preferences.getBoolean(
                                 questionnaireCompletedPreferenceKey(currentAccountKey), false
@@ -415,15 +475,111 @@ fun AuthApp() {
         }
     }
 
-    LaunchedEffect(destination) {
-        if (destination == AuthDestination.SPLASH) {
-            // Every app launch begins with the persisted theme selection.
-            delay(1200)
-            if (destination == AuthDestination.SPLASH) {
-                destination = if (preferences.getBoolean("safety_note_seen", false)) {
-                    AuthDestination.AUTH_WELCOME
+    LaunchedEffect(Unit) {
+        // Keep the branded splash visible briefly, then restore the persisted session.
+        // SharedPreferences survives process death; refreshing here makes the saved
+        // refresh token usable even when the previous JWT has expired.
+        delay(1200)
+        if (destination != AuthDestination.SPLASH) return@LaunchedEffect
+
+        val storedRefreshToken = TokenStore.getRefreshToken(context)
+        if (storedRefreshToken.isNullOrBlank()) {
+            destination = if (preferences.getBoolean("safety_note_seen", false)) {
+                AuthDestination.AUTH_WELCOME
+            } else {
+                AuthDestination.SAFETY_NOTE
+            }
+            return@LaunchedEffect
+        }
+
+        when (val refreshResult = withContext(Dispatchers.IO) {
+            AuthApi.refreshAccessToken(serverBaseUrl, storedRefreshToken)
+        }) {
+            is com.sportakus.auth.data.api.RefreshTokenApiResult.Success -> {
+                // Persist the rotated pair immediately: the old refresh token may no
+                // longer be accepted after a successful refresh exchange.
+                TokenStore.saveTokens(context, refreshResult.accessToken, refreshResult.refreshToken)
+                isGuestSession = false
+
+                val savedIdentity = preferences.getString("active_account_identity", "").orEmpty()
+                currentAccountKey = savedIdentity.ifBlank {
+                    jwtAccountIdentity(refreshResult.accessToken, currentUserName.ifBlank { "account" })
+                }
+                if (savedIdentity.isBlank()) {
+                    preferences.edit().putString("active_account_identity", currentAccountKey).apply()
+                }
+                // Fetch the real account profile. A temporary profile endpoint/network
+                // failure must not discard a valid refreshed authentication session.
+                when (val profileResult = withContext(Dispatchers.IO) {
+                    AuthApi.getCurrentUserName(serverBaseUrl, refreshResult.accessToken, refreshResult.refreshToken)
+                }) {
+                    is CurrentUserApiResult.Success -> {
+                        currentProfile = profileResult.profile
+                        currentUserName = currentProfile.displayName
+                        if (!profileResult.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(
+                                context,
+                                profileResult.renewedAccessToken,
+                                profileResult.renewedRefreshToken ?: refreshResult.refreshToken
+                            )
+                        }
+                    }
+                    is CurrentUserApiResult.Failure -> {
+                        if (!profileResult.renewedAccessToken.isNullOrBlank()) {
+                            TokenStore.saveTokens(
+                                context,
+                                profileResult.renewedAccessToken,
+                                profileResult.renewedRefreshToken ?: refreshResult.refreshToken
+                            )
+                        }
+                        if (profileResult.httpStatus == 401) {
+                            TokenStore.clear(context)
+                            preferences.edit().remove("active_account_identity").apply()
+                            currentAccountKey = ""
+                            notice = "Сессия больше не действительна. Войди в аккаунт повторно."
+                            destination = AuthDestination.AUTH_WELCOME
+                            return@LaunchedEffect
+                        }
+                        // Keep the session; profile details can be reloaded when the
+                        // backend becomes available again.
+                        currentUserName = currentProfile.displayName
+                        notice = "Не удалось обновить данные профиля. Авторизация сохранена. ${profileResult.message}"
+                    }
+                }
+
+                val questionnaireDone = preferences.getBoolean(
+                    questionnaireCompletedPreferenceKey(currentAccountKey), false
+                )
+                destination = if (questionnaireDone) AuthDestination.MAIN_APP else AuthDestination.QUESTION_REASON
+            }
+            is com.sportakus.auth.data.api.RefreshTokenApiResult.Failure -> {
+                if (refreshResult.httpStatus == 401) {
+                    TokenStore.clear(context)
+                    preferences.edit().remove("active_account_identity").apply()
+                    currentAccountKey = ""
+                    currentProfile = UserProfile()
+                    currentUserName = ""
+                    notice = "Срок действия сессии истёк. Войди в аккаунт повторно."
+                    destination = if (preferences.getBoolean("safety_note_seen", false)) {
+                        AuthDestination.AUTH_WELCOME
+                    } else {
+                        AuthDestination.SAFETY_NOTE
+                    }
                 } else {
-                    AuthDestination.SAFETY_NOTE
+                    // A network/server outage is not proof that the refresh token is
+                    // invalid. Retain both tokens and let the user continue to the app;
+                    // subsequent protected requests will retry refresh on HTTP 401.
+                    currentAccountKey = preferences.getString("active_account_identity", "").orEmpty()
+                    currentUserName = currentProfile.displayName
+                    notice = "Не удалось проверить сохранённую сессию. Токены сохранены, повторная проверка будет выполнена при следующем запросе. ${refreshResult.message}"
+                    val questionnaireDone = currentAccountKey.isNotBlank() && preferences.getBoolean(
+                        questionnaireCompletedPreferenceKey(currentAccountKey), false
+                    )
+                    destination = when {
+                        questionnaireDone -> AuthDestination.MAIN_APP
+                        currentAccountKey.isNotBlank() -> AuthDestination.QUESTION_REASON
+                        else -> AuthDestination.AUTH_WELCOME
+                    }
                 }
             }
         }
@@ -603,6 +759,7 @@ fun AuthApp() {
                                 currentProfile = UserProfile()
                                 activeWorkoutTitle = null
                                 activeWorkoutSeconds = 0
+                                activeWorkoutPaused = false
                                 destination = AuthDestination.MAIN_APP
                             },
                             onProvider = { provider -> notice = "Регистрация через $provider пока не подключена к серверу." },
@@ -662,13 +819,8 @@ fun AuthApp() {
                                 ?: if (registrationEmailTouched || registrationAttempted) registrationEmailError(registrationEmail) else null,
                             phoneError = serverRegistrationFieldErrors["phone"]
                                 ?: if (registrationPhoneTouched || registrationAttempted) registrationPhoneError(registrationPhone) else null,
-                            passwordError = serverRegistrationFieldErrors["password"] ?: if (registrationPasswordTouched || registrationAttempted) {
-                                when {
-                                    registrationPassword.isBlank() -> "Пароль обязателен"
-                                    registrationPassword.length < 8 -> "Пароль должен содержать не менее 8 символов"
-                                    else -> null
-                                }
-                            } else null,
+                            passwordError = serverRegistrationFieldErrors["password"]
+                                ?: if (registrationPasswordTouched || registrationAttempted) passwordPolicyError(registrationPassword) else null,
                             darkTheme = activeDarkTheme,
                             onToggleTheme = toggleTheme,
                             onBack = { destination = AuthDestination.AUTH_WELCOME },
@@ -771,20 +923,18 @@ fun AuthApp() {
                                                     TokenStore.saveTokens(context, result.jwt, result.refreshToken)
                                                     isGuestSession = false
                                                     currentAccountKey = jwtAccountIdentity(result.jwt, registrationEmail)
-                                                    currentUserName = registrationLogin.trim().ifBlank { "Спортсмен" }
                                                     currentProfile = UserProfile(
                                                         login = registrationLogin.trim(),
                                                         email = registrationEmail.trim(),
                                                         phone = registrationPhone.takeIf { it.isNotBlank() }?.let { formatPhoneForRegistrationApi(it).orEmpty() }.orEmpty()
                                                     )
+                                                    currentUserName = currentProfile.displayName
                                                     loadCurrentProfile()
                                                     preferences.edit()
                                                         .putString("active_account_identity", currentAccountKey)
-                                                        .putString(profileDisplayNamePreferenceKey(currentAccountKey), currentUserName)
                                                         .putString(accountAliasPreferenceKey(registrationLogin), currentAccountKey)
                                                         .putString(accountAliasPreferenceKey(registrationEmail), currentAccountKey)
                                                         .putString(accountAliasPreferenceKey(registrationPhone), currentAccountKey)
-                                                        .putString("profile_display_name", currentUserName)
                                                         .apply()
                                                     val questionnaireDone = preferences.getBoolean(
                                                         questionnaireCompletedPreferenceKey(currentAccountKey), false
@@ -960,10 +1110,11 @@ fun AuthApp() {
                             darkTheme = activeDarkTheme,
                             onToggleTheme = toggleTheme,
                             onBack = { destination = AuthDestination.RECOVERY_VERIFY_CODE },
+                            passwordValidationError = if (newPassword.isNotEmpty()) passwordPolicyError(newPassword) else null,
                             onReset = {
                                 when {
                                     newPassword.isBlank() -> notice = "Введите новый пароль."
-                                    newPassword.length < 8 -> Unit
+                                    passwordPolicyError(newPassword) != null -> notice = passwordPolicyError(newPassword)
                                     newPassword != confirmPassword -> notice = "Пароли не совпадают."
                                     recoverySubmitting -> Unit
                                     else -> {
@@ -1034,25 +1185,77 @@ fun AuthApp() {
                             exercises = exerciseCatalog.toList(),
                             activeWorkoutTitle = activeWorkoutTitle,
                             activeWorkoutSeconds = activeWorkoutSeconds,
+                            activeWorkoutPaused = activeWorkoutPaused,
+                            onToggleWorkoutPause = { activeWorkoutPaused = !activeWorkoutPaused },
                             onFinishWorkout = {
                                 activeWorkoutTitle = null
                                 activeWorkoutSeconds = 0
+                                activeWorkoutPaused = false
                             },
-                            isAdmin = com.sportakus.auth.BuildConfig.DEBUG || jwtHasAdminRole(TokenStore.getJwt(context)),
+                            isAdmin = jwtHasAdminRole(TokenStore.getAccessToken(context)),
+                            roleLabel = jwtRoleLabel(TokenStore.getAccessToken(context)),
                             onOpenExercise = { id ->
                                 selectedExerciseId = id
                                 destination = AuthDestination.WORKOUT_DETAIL
                             },
                             onOpenAdmin = { destination = AuthDestination.ADMIN_LIST },
+                            onOpenPartners = {
+                                partnerMessage = null
+                                destination = AuthDestination.PARTNERS
+                                loadPartners()
+                            },
+                            onAddPartner = {
+                                if (jwtHasAdminRole(TokenStore.getAccessToken(context))) {
+                                    selectedPartner = null
+                                    partnerMessage = null
+                                    loadPartners()
+                                    destination = AuthDestination.PARTNER_EDITOR
+                                } else {
+                                    notice = "Добавление партнёров доступно только пользователям с ролью ADMIN."
+                                }
+                            },
+                            onRequestEmailCode = { newEmail, completed ->
+                                val jwt = TokenStore.getAccessToken(context)
+                                val refresh = TokenStore.getRefreshToken(context)
+                                if (jwt.isNullOrBlank()) {
+                                    completed(false, "Сессия не найдена. Войди в аккаунт повторно.")
+                                } else {
+                                    coroutineScope.launch {
+                                        when (val result = withContext(Dispatchers.IO) {
+                                            AuthApi.requestCurrentUserEmailConfirmation(serverBaseUrl, jwt, refresh, newEmail)
+                                        }) {
+                                            is AuthActionApiResult.Success -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                completed(true, "Код отправлен. Он действует 15 минут.")
+                                            }
+                                            is AuthActionApiResult.Failure -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                if (result.httpStatus == 401) requireFreshLogin(result.message)
+                                                completed(false, result.message)
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                             onLogout = {
                                 val accessToken = TokenStore.getAccessToken(context)
                                 val refreshToken = TokenStore.getRefreshToken(context)
                                 coroutineScope.launch {
-                                    if (!accessToken.isNullOrBlank()) {
+                                    val remoteLogoutResult = if (!accessToken.isNullOrBlank() && !refreshToken.isNullOrBlank()) {
                                         withContext(Dispatchers.IO) {
                                             AuthApi.logout(serverBaseUrl, accessToken, refreshToken)
                                         }
+                                    } else {
+                                        null
                                     }
+
+                                    // Always clear the local session so the user can leave
+                                    // the account even when the device is offline. The
+                                    // message distinguishes remote logout success/failure.
                                     TokenStore.clear(context)
                                     isGuestSession = false
                                     currentAccountKey = ""
@@ -1060,44 +1263,92 @@ fun AuthApp() {
                                     currentUserName = ""
                                     activeWorkoutTitle = null
                                     activeWorkoutSeconds = 0
+                                    activeWorkoutPaused = false
                                     preferences.edit().remove("active_account_identity").apply()
                                     destination = AuthDestination.AUTH_WELCOME
+
+                                    notice = when (remoteLogoutResult) {
+                                        is AuthActionApiResult.Success -> null
+                                        is AuthActionApiResult.Failure -> "На устройстве выход выполнен, но сервер не подтвердил завершение сессии: ${remoteLogoutResult.message}"
+                                        null -> "Локальная сессия очищена. Для серверного выхода не хватило токенов авторизации."
+                                    }
                                 }
                             },
-                            onProfileSave = { updatedProfile, onCompleted ->
-                                val accessToken = TokenStore.getAccessToken(context)
-                                if (accessToken.isNullOrBlank()) {
-                                    notice = "Для сохранения профиля необходимо войти в аккаунт."
-                                    onCompleted(false)
+                            onProfileSave = { update, onCompleted ->
+                                if (profileSaving) {
+                                    onCompleted(false, "Сохранение уже выполняется.")
+                                } else if (!update.hasChanges) {
+                                    onCompleted(true, "Изменений нет.")
                                 } else {
+                                    profileSaving = true
+                                    notice = null
                                     coroutineScope.launch {
-                                        when (val result = withContext(Dispatchers.IO) {
-                                            AuthApi.updateCurrentUserProfile(serverBaseUrl, accessToken, updatedProfile, TokenStore.getRefreshToken(context))
-                                        }) {
-                                            is AuthActionApiResult.Success -> {
-                                                if (!result.renewedAccessToken.isNullOrBlank()) {
-                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: TokenStore.getRefreshToken(context))
+                                        var saveSucceeded = true
+                                        var saveMessage = "Профиль сохранён."
+                                        val jwt = TokenStore.getAccessToken(context)
+                                        val refresh = TokenStore.getRefreshToken(context)
+                                        if (jwt.isNullOrBlank()) {
+                                            saveSucceeded = false
+                                            saveMessage = "Сессия не найдена. Войди в аккаунт повторно."
+                                        } else {
+                                            when (val result = withContext(Dispatchers.IO) {
+                                                AuthApi.updateCurrentUserProfile(serverBaseUrl, jwt, update, refresh)
+                                            }) {
+                                                is AuthActionApiResult.Success -> {
+                                                    if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                        TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                    }
+                                                    // Reload the authoritative server profile after the empty 200 response.
+                                                    val currentJwt = TokenStore.getAccessToken(context) ?: result.renewedAccessToken ?: jwt
+                                                    val currentRefresh = TokenStore.getRefreshToken(context) ?: result.renewedRefreshToken ?: refresh
+                                                    when (val refreshedProfile = withContext(Dispatchers.IO) {
+                                                        AuthApi.getCurrentUserName(serverBaseUrl, currentJwt, currentRefresh)
+                                                    }) {
+                                                        is CurrentUserApiResult.Success -> {
+                                                            if (!refreshedProfile.renewedAccessToken.isNullOrBlank()) {
+                                                                TokenStore.saveTokens(context, refreshedProfile.renewedAccessToken, refreshedProfile.renewedRefreshToken ?: currentRefresh)
+                                                            }
+                                                            currentProfile = refreshedProfile.profile
+                                                        }
+                                                        is CurrentUserApiResult.Failure -> {
+                                                            if (refreshedProfile.httpStatus == 401) {
+                                                                saveSucceeded = false
+                                                                saveMessage = refreshedProfile.message
+                                                                requireFreshLogin(refreshedProfile.message)
+                                                            } else {
+                                                                // PUT was accepted. Keep the session and reflect submitted fields until the next profile refresh.
+                                                                currentProfile = currentProfile.copy(
+                                                                    login = update.newLogin ?: currentProfile.login,
+                                                                    nickname = update.newNickname ?: currentProfile.nickname,
+                                                                    email = update.newEmail ?: currentProfile.email,
+                                                                    phone = update.newPhone ?: currentProfile.phone,
+                                                                    weight = update.weight?.toString() ?: currentProfile.weight,
+                                                                    height = update.height?.toString() ?: currentProfile.height
+                                                                )
+                                                                saveMessage = "Изменения сохранены, но обновить профиль с сервера не удалось: ${refreshedProfile.message}"
+                                                            }
+                                                        }
+                                                    }
                                                 }
-                                                currentProfile = updatedProfile
-                                                currentUserName = updatedProfile.displayName
-                                                preferences.edit()
-                                                    .putString(profileDisplayNamePreferenceKey(currentAccountKey.ifBlank { "guest" }), currentUserName)
-                                                    .putString("profile_display_name", currentUserName)
-                                                    .apply()
-                                                onCompleted(true)
-                                            }
-                                            is AuthActionApiResult.Failure -> {
-                                                if (!result.renewedAccessToken.isNullOrBlank()) {
-                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: TokenStore.getRefreshToken(context))
+                                                is AuthActionApiResult.Failure -> {
+                                                    if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                        TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                    }
+                                                    saveSucceeded = false
+                                                    saveMessage = result.message
+                                                    if (result.httpStatus == 401) requireFreshLogin(result.message)
                                                 }
-                                                if (result.httpStatus == 401) {
-                                                    TokenStore.clear(context)
-                                                    destination = AuthDestination.LOGIN
-                                                }
-                                                notice = result.message
-                                                onCompleted(false)
                                             }
                                         }
+
+                                        currentUserName = currentProfile.displayName
+                                        if (saveSucceeded) {
+                                            notice = if (saveMessage.startsWith("Изменения сохранены, но обновить профиль")) saveMessage else null
+                                        } else {
+                                            notice = saveMessage
+                                        }
+                                        profileSaving = false
+                                        onCompleted(saveSucceeded, saveMessage)
                                     }
                                 }
                             }
@@ -1114,6 +1365,7 @@ fun AuthApp() {
                                     onStart = {
                                         activeWorkoutTitle = exercise.title
                                         activeWorkoutSeconds = 0
+                                        activeWorkoutPaused = false
                                         destination = AuthDestination.MAIN_APP
                                     }
                                 )
@@ -1147,6 +1399,153 @@ fun AuthApp() {
                                 persistExerciseCatalog()
                                 destination = AuthDestination.ADMIN_LIST
                                 notice = if (editingExerciseId == null) "Упражнение добавлено в локальный список предпросмотра." else "Изменения сохранены в локальном списке предпросмотра."
+                            }
+                        )
+
+                        AuthDestination.PARTNERS -> PartnersListScreen(
+                            partners = partnerCatalog.toList(),
+                            isLoading = partnerLoading,
+                            message = partnerMessage,
+                            isAdmin = jwtHasAdminRole(TokenStore.getAccessToken(context)),
+                            onBack = { destination = AuthDestination.MAIN_APP },
+                            onRefresh = loadPartners,
+                            onOpen = { id ->
+                                val jwt = TokenStore.getAccessToken(context)
+                                val refresh = TokenStore.getRefreshToken(context)
+                                if (jwt.isNullOrBlank()) {
+                                    partnerMessage = "Сессия не найдена. Войди в аккаунт повторно."
+                                } else {
+                                    coroutineScope.launch {
+                                        when (val result = withContext(Dispatchers.IO) {
+                                            AuthApi.getPartnerById(serverBaseUrl, jwt, refresh, id)
+                                        }) {
+                                            is PartnerDetailsApiResult.Success -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                selectedPartner = result.partner
+                                                partnerMessage = null
+                                                destination = AuthDestination.PARTNER_DETAILS
+                                            }
+                                            is PartnerDetailsApiResult.Failure -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                partnerMessage = result.message
+                                                if (result.httpStatus == 401) requireFreshLogin(result.message)
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onAdd = {
+                                if (jwtHasAdminRole(TokenStore.getAccessToken(context))) {
+                                    selectedPartner = null
+                                    partnerMessage = null
+                                    destination = AuthDestination.PARTNER_EDITOR
+                                } else partnerMessage = "Для создания партнёров требуется роль ADMIN."
+                            },
+                            onEdit = { partner ->
+                                if (jwtHasAdminRole(TokenStore.getAccessToken(context))) {
+                                    selectedPartner = partner
+                                    partnerMessage = null
+                                    destination = AuthDestination.PARTNER_EDITOR
+                                } else partnerMessage = "Для изменения партнёров требуется роль ADMIN."
+                            },
+                            onDelete = { partner ->
+                                val jwt = TokenStore.getAccessToken(context)
+                                val refresh = TokenStore.getRefreshToken(context)
+                                if (jwt.isNullOrBlank() || !jwtHasAdminRole(jwt)) {
+                                    partnerMessage = "Для удаления партнёров требуется роль ADMIN."
+                                } else {
+                                    coroutineScope.launch {
+                                        when (val result = withContext(Dispatchers.IO) {
+                                            AuthApi.deletePartner(serverBaseUrl, jwt, refresh, partner.id)
+                                        }) {
+                                            is PartnerMutationApiResult.Success -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                partnerCatalog.removeAll { it.id == partner.id }
+                                                partnerMessage = null
+                                            }
+                                            is PartnerMutationApiResult.Failure -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                partnerMessage = result.message
+                                                if (result.httpStatus == 401) requireFreshLogin(result.message)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        )
+
+                        AuthDestination.PARTNER_DETAILS -> {
+                            val partner = selectedPartner
+                            if (partner == null) {
+                                destination = AuthDestination.PARTNERS
+                            } else {
+                                PartnerDetailsScreen(
+                                    partner = partner,
+                                    isAdmin = jwtHasAdminRole(TokenStore.getAccessToken(context)),
+                                    onBack = { destination = AuthDestination.PARTNERS },
+                                    onEdit = {
+                                        selectedPartner = partner
+                                        partnerMessage = null
+                                        destination = AuthDestination.PARTNER_EDITOR
+                                    }
+                                )
+                            }
+                        }
+
+                        AuthDestination.PARTNER_EDITOR -> PartnerEditorScreen(
+                            initial = selectedPartner,
+                            saving = partnerSaving,
+                            errorMessage = partnerMessage,
+                            onCancel = {
+                                partnerMessage = null
+                                destination = AuthDestination.PARTNERS
+                            },
+                            onSave = { partnerRequest ->
+                                val jwt = TokenStore.getAccessToken(context)
+                                val refresh = TokenStore.getRefreshToken(context)
+                                if (jwt.isNullOrBlank() || !jwtHasAdminRole(jwt)) {
+                                    partnerMessage = "Для управления партнёрами требуется роль ADMIN."
+                                } else if (!partnerSaving) {
+                                    partnerSaving = true
+                                    partnerMessage = null
+                                    coroutineScope.launch {
+                                        val editing = selectedPartner
+                                        val result = withContext(Dispatchers.IO) {
+                                            if (editing == null) {
+                                                AuthApi.createPartner(serverBaseUrl, jwt, refresh, partnerRequest)
+                                            } else {
+                                                AuthApi.updatePartner(serverBaseUrl, jwt, refresh, editing.id, partnerRequest)
+                                            }
+                                        }
+                                        partnerSaving = false
+                                        when (result) {
+                                            is PartnerMutationApiResult.Success -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                selectedPartner = null
+                                                destination = AuthDestination.PARTNERS
+                                                partnerMessage = null
+                                                loadPartners()
+                                            }
+                                            is PartnerMutationApiResult.Failure -> {
+                                                if (!result.renewedAccessToken.isNullOrBlank()) {
+                                                    TokenStore.saveTokens(context, result.renewedAccessToken, result.renewedRefreshToken ?: refresh)
+                                                }
+                                                partnerMessage = result.message
+                                                if (result.httpStatus == 401) requireFreshLogin(result.message)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         )
 
@@ -1186,12 +1585,10 @@ private fun accountPreferenceSuffix(identity: String): String {
 private fun questionnaireCompletedPreferenceKey(identity: String): String =
     "questionnaire_completed_${accountPreferenceSuffix(identity)}"
 
-private fun profileDisplayNamePreferenceKey(identity: String): String =
-    "profile_display_name_${accountPreferenceSuffix(identity)}"
-
 private fun accountAliasPreferenceKey(identifier: String): String =
     "account_identity_alias_${accountPreferenceSuffix(identifier)}"
 
+/** Local-only full name, scoped to the authenticated account. */
 /** Prefer a stable server identity claim; fall back to the login/email entered by the user. */
 private fun jwtAccountIdentity(token: String?, fallback: String): String {
     if (!token.isNullOrBlank()) {
@@ -1302,9 +1699,51 @@ private fun normalizeBaseUrl(raw: String): String? {
     return value
 }
 
-/** Client-side checks mirror the rules described by the C# registration endpoint. */
-private fun registrationUsernameError(value: String): String? =
-    if (value.isBlank()) "Имя пользователя обязательно" else null
+/** Client-side checks mirror the login/password rules provided by the backend. */
+private const val PASSWORD_SPECIAL_CHARACTERS = "!\"#\$%&'()*+,-./:;<=>?@[]^{|}~"
+private val PASSWORD_ALLOWED_CHARACTERS: Set<Char> = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" + PASSWORD_SPECIAL_CHARACTERS
+).toSet()
+
+private fun loginIdentifierError(value: String): String? {
+    val identifier = value.trim()
+    if (identifier.isEmpty()) return "Введите логин, почту или телефон."
+    if (identifier.contains('@')) return registrationEmailError(identifier)
+
+    val phoneCandidate = identifier.any(Char::isDigit) &&
+        identifier.all { it.isDigit() || it in "+ ()-" }
+    if (phoneCandidate) {
+        return if (isCompleteInternationalPhone(identifier)) null
+        else "Введите корректный номер телефона с кодом страны."
+    }
+    return registrationUsernameError(identifier)
+}
+
+private fun registrationUsernameError(value: String): String? {
+    if (value.isEmpty()) return "Логин обязателен"
+    if (value.length > 50) return "Логин не должен превышать 50 символов"
+    if (value.first() !in 'A'..'Z' && value.first() !in 'a'..'z' && value.first() != '_') {
+        return "Логин должен начинаться с латинской буквы или символа _"
+    }
+    if (value.any { it !in 'A'..'Z' && it !in 'a'..'z' && it !in '0'..'9' && it != '_' }) {
+        return "Логин может содержать только латинские буквы, цифры и символ _"
+    }
+    return null
+}
+
+private fun passwordPolicyError(value: String): String? {
+    if (value.isEmpty()) return "Пароль обязателен"
+    val issues = mutableListOf<String>()
+    if (value.length < 8) issues += "не менее 8 символов"
+    if (value.any { it !in PASSWORD_ALLOWED_CHARACTERS }) {
+        issues += "только латинские буквы, цифры и разрешённые спецсимволы"
+    }
+    if (value.none { it in 'A'..'Z' }) issues += "хотя бы одну заглавную букву"
+    if (value.none { it in 'a'..'z' }) issues += "хотя бы одну строчную букву"
+    if (value.none { it in '0'..'9' }) issues += "хотя бы одну цифру"
+    if (value.none { it in PASSWORD_SPECIAL_CHARACTERS }) issues += "хотя бы один специальный символ"
+    return if (issues.isEmpty()) null else "Пароль должен содержать: ${issues.joinToString(", ")}."
+}
 
 private fun registrationEmailError(value: String): String? {
     if (value.isBlank()) return "Почта обязательна"
@@ -1320,43 +1759,54 @@ private fun registrationPhoneError(value: String): String? {
     return if (isCompleteInternationalPhone(value)) null else "Введите корректный номер с международным кодом страны."
 }
 
-/** Read standard ASP.NET/JWT role claim variants. UI visibility is not an authorization boundary. */
-private fun jwtHasAdminRole(token: String?): Boolean {
-    if (token.isNullOrBlank()) return false
+/** Role claims are read from the access-token payload only to tailor UI visibility.
+ * The backend must still enforce every administrative operation and may return 403.
+ */
+private fun jwtRoleNames(token: String?): List<String> {
+    if (token.isNullOrBlank()) return emptyList()
     return try {
         val parts = token.split('.')
-        if (parts.size < 2) return false
+        if (parts.size < 2) return emptyList()
         val payloadBytes = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
         val payload = JSONObject(String(payloadBytes, Charsets.UTF_8))
+        val roles = linkedSetOf<String>()
+
+        fun collect(value: Any?) {
+            when (value) {
+                is String -> value.split(',', ';').map { it.trim() }.filter { it.isNotBlank() }.forEach { roles.add(it) }
+                is org.json.JSONArray -> for (index in 0 until value.length()) collect(value.opt(index))
+                is JSONObject -> {
+                    val keys = value.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (key.contains("role", ignoreCase = true) || key.equals("name", ignoreCase = true) || key.equals("value", ignoreCase = true)) {
+                            collect(value.opt(key))
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+
         val keys = payload.keys()
         while (keys.hasNext()) {
             val key = keys.next()
-            val normalized = key.lowercase()
             val value = payload.opt(key)
-            if (normalized.contains("role") && valueContainsAdmin(value)) return true
-            if ((normalized == "isadmin" || normalized == "is_admin") && value == true) return true
+            if (key.contains("role", ignoreCase = true)) collect(value)
+            if ((key.equals("isadmin", ignoreCase = true) || key.equals("is_admin", ignoreCase = true)) && value == true) {
+                roles.add("ADMIN")
+            }
         }
-        false
+        roles.toList()
     } catch (_: Exception) {
-        false
+        emptyList()
     }
 }
 
-private fun valueContainsAdmin(value: Any?): Boolean = when (value) {
-    is String -> value.split(',', ';', ' ').any { it.equals("admin", ignoreCase = true) }
-    is org.json.JSONArray -> (0 until value.length()).any { valueContainsAdmin(value.opt(it)) }
-    is JSONObject -> {
-        val keys = value.keys()
-        var found = false
-        while (keys.hasNext() && !found) {
-            val key = keys.next()
-            if (key.contains("role", ignoreCase = true) || key.equals("name", ignoreCase = true)) {
-                found = valueContainsAdmin(value.opt(key))
-            }
-        }
-        found
-    }
-    else -> false
+private fun jwtRoleLabel(token: String?): String = jwtRoleNames(token).joinToString(", ")
+
+private fun jwtHasAdminRole(token: String?): Boolean = jwtRoleNames(token).any { role ->
+    role.trim().uppercase().removePrefix("ROLE_") in setOf("ADMIN", "ADMINISTRATOR")
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

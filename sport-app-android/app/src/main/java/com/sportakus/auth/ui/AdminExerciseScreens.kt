@@ -38,7 +38,7 @@ fun AdminExerciseListScreen(
     var query by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<WorkoutExercise?>(null) }
     val filtered = exercises.filter { it.title.contains(query, ignoreCase = true) }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             AdminRoundButton(Icons.Filled.ArrowBack, "Назад", onBack)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -47,7 +47,7 @@ fun AdminExerciseListScreen(
             }
             AdminRoundButton(Icons.Filled.MoreVert, "Дополнительно") { }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 32.dp)) {
             AdminSearchField(query, { query = it }, "Поиск упражнений")
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -92,7 +92,7 @@ fun AdminExerciseListScreen(
                     AdminText("Упражнения не найдены", 14, modifier = Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(32.dp))
         }
     }
 
@@ -202,12 +202,12 @@ fun AdminExerciseEditorScreen(
     var validation by remember { mutableStateOf<String?>(null) }
     val isNew = initial == null
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().imePadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             AdminRoundButton(Icons.Filled.ArrowBack, "Назад", onCancel)
             AdminText(if (isNew) "Добавить упражнение" else "Редактировать упражнение", 18, FontWeight.Bold, modifier = Modifier.padding(start = 12.dp))
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 24.dp)) {
             Surface(
                 Modifier.fillMaxWidth().height(90.dp).clickable { },
                 color = MaterialTheme.colorScheme.surfaceVariant,

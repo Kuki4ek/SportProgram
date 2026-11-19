@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import com.sportakus.auth.data.api.UserProfile
+import com.sportakus.auth.data.api.ProfileUpdateRequest
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -151,13 +153,19 @@ fun MainAppScreen(
     profile: UserProfile,
     exercises: List<WorkoutExercise>,
     isAdmin: Boolean,
+    roleLabel: String,
     activeWorkoutTitle: String?,
     activeWorkoutSeconds: Int,
+    activeWorkoutPaused: Boolean,
+    onToggleWorkoutPause: () -> Unit,
     onFinishWorkout: () -> Unit,
     onOpenExercise: (String) -> Unit,
     onOpenAdmin: () -> Unit,
+    onOpenPartners: () -> Unit,
+    onAddPartner: () -> Unit,
     onLogout: () -> Unit,
-    onProfileSave: (UserProfile, (Boolean) -> Unit) -> Unit
+    onRequestEmailCode: (String, (Boolean, String) -> Unit) -> Unit,
+    onProfileSave: (ProfileUpdateRequest, (Boolean, String) -> Unit) -> Unit
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.HOME) }
     var profileEditorOpen by rememberSaveable { mutableStateOf(false) }
@@ -193,6 +201,8 @@ fun MainAppScreen(
                 profile = profile,
                 activeWorkoutTitle = activeWorkoutTitle,
                 activeWorkoutSeconds = activeWorkoutSeconds,
+                activeWorkoutPaused = activeWorkoutPaused,
+                onToggleWorkoutPause = onToggleWorkoutPause,
                 onFinishWorkout = onFinishWorkout,
                 exercises = exercises.filter { it.published },
                 onSeeAll = { tab = MainTab.SEARCH },
@@ -211,9 +221,11 @@ fun MainAppScreen(
                 ProfileEditScreen(
                     profile = profile,
                     onBack = { profileEditorOpen = false },
-                    onSave = { updated ->
-                        onProfileSave(updated) { saved ->
+                    onRequestEmailCode = onRequestEmailCode,
+                    onSave = { update, completed ->
+                        onProfileSave(update) { saved, message ->
                             if (saved) profileEditorOpen = false
+                            completed(saved, message)
                         }
                     }
                 )
@@ -221,8 +233,11 @@ fun MainAppScreen(
                 ProfileOverviewScreen(
                     profile = profile,
                     isAdmin = isAdmin,
+                    roleLabel = roleLabel,
                     onBack = { tab = MainTab.HOME },
                     onOpenAdmin = onOpenAdmin,
+                    onOpenPartners = onOpenPartners,
+                    onAddPartner = onAddPartner,
                     onLogout = onLogout,
                     onEditProfile = { profileEditorOpen = true }
                 )
@@ -256,6 +271,8 @@ private fun HomeDashboardScreen(
     profile: UserProfile,
     activeWorkoutTitle: String?,
     activeWorkoutSeconds: Int,
+    activeWorkoutPaused: Boolean,
+    onToggleWorkoutPause: () -> Unit,
     onFinishWorkout: () -> Unit,
     exercises: List<WorkoutExercise>,
     onSeeAll: () -> Unit,
@@ -298,14 +315,29 @@ private fun HomeDashboardScreen(
                         shadowElevation = 5.dp
                     ) {
                         Row(Modifier.padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(48.dp).border(4.dp, Color(0xFF00C4D9), CircleShape).padding(5.dp).clip(CircleShape).background(Color(0xFF254400)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.Pause, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                            IconButton(
+                                onClick = onToggleWorkoutPause,
+                                modifier = Modifier.size(48.dp)
+                                    .border(3.dp, Color(0xFF00C4D9), CircleShape)
+                                    .padding(4.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF254400))
+                            ) {
+                                Icon(
+                                    if (activeWorkoutPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                                    contentDescription = if (activeWorkoutPaused) "Продолжить тренировку" else "Приостановить тренировку",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                             Column(Modifier.weight(1f).padding(start = 13.dp)) {
                                 AppText("В процессе", 12, color = Color(0xFF00C4D9), weight = FontWeight.Medium)
                                 AppText(activeWorkoutTitle.orEmpty(), 17, FontWeight.SemiBold, color = Color.White, maxLines = 1)
                             }
-                            AppText(formatElapsedTime(activeWorkoutSeconds), 22, FontWeight.Bold, color = Color(0xFFFFD21F))
+                            Column(horizontalAlignment = Alignment.End) {
+                                AppText(formatElapsedTime(activeWorkoutSeconds), 22, FontWeight.Bold, color = Color(0xFFFFD21F))
+                                if (activeWorkoutPaused) AppText("Пауза", 10, FontWeight.Medium, color = Color.White.copy(alpha = .85f))
+                            }
                             Spacer(Modifier.width(5.dp))
                             IconButton(onClick = onFinishWorkout, modifier = Modifier.size(30.dp)) {
                                 Icon(Icons.Filled.Close, contentDescription = "Завершить тренировку", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -509,7 +541,6 @@ private fun SearchCatalogScreen(
     var gridView by rememberSaveable { mutableStateOf(false) }
     var showAllRecent by rememberSaveable { mutableStateOf(false) }
 
-    // Search is exercise-only: category names are not displayed as sections or filters.
     val matching = exercises.filter { exercise ->
         query.isBlank() ||
             exercise.title.contains(query, ignoreCase = true) ||
@@ -543,9 +574,36 @@ private fun SearchCatalogScreen(
             )
         }
 
+        // View mode is available immediately on opening the search tab, even before typing.
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AppText(
+                if (query.isBlank()) "Тренировки" else "${results.size} результатов",
+                14,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = { gridView = true }, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.Filled.GridView,
+                    contentDescription = "Плиткой по две",
+                    tint = if (gridView) Color(0xFF79B505) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            IconButton(onClick = { gridView = false }, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.Filled.ViewAgenda,
+                    contentDescription = "Списком",
+                    tint = if (!gridView) Color(0xFF79B505) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+        }
+
         if (query.isBlank()) {
             if (recentSearches.isNotEmpty()) {
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppText("Недавний поиск", 17, FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     TextButton(onClick = { showAllRecent = !showAllRecent }) {
@@ -580,23 +638,8 @@ private fun SearchCatalogScreen(
                     Spacer(Modifier.height(7.dp))
                 }
             }
-
-            Spacer(Modifier.height(22.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppText("Тренировки", 19, FontWeight.Bold, modifier = Modifier.weight(1f))
-                AppText(exercises.size.toString(), 13, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(10.dp))
-            if (exercises.isEmpty()) {
-                EmptyCatalogPlaceholder("Тренировки появятся, когда будут доступны в каталоге.")
-            } else {
-                exercises.forEach { exercise ->
-                    CatalogWorkoutRow(exercise) { onOpenExercise(exercise.id) }
-                    Spacer(Modifier.height(9.dp))
-                }
-            }
         } else {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -608,53 +651,32 @@ private fun SearchCatalogScreen(
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppText(
-                    "${results.size} результатов",
-                    14,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { gridView = true }, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Filled.GridView,
-                        contentDescription = "Плиткой",
-                        tint = if (gridView) Color(0xFF79B505) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(25.dp)
-                    )
-                }
-                IconButton(onClick = { gridView = false }, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Filled.ViewAgenda,
-                        contentDescription = "Списком",
-                        tint = if (!gridView) Color(0xFF79B505) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(25.dp)
-                    )
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            if (results.isEmpty()) {
-                EmptyCatalogPlaceholder("По этому запросу ничего не найдено.")
-            } else if (gridView) {
-                results.chunked(2).forEach { rowItems ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        rowItems.forEach { exercise ->
-                            GridWorkoutCard(
-                                exercise = exercise,
-                                modifier = Modifier.weight(1f).aspectRatio(0.82f),
-                                onClick = { onOpenExercise(exercise.id) }
-                            )
-                        }
-                        if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.height(12.dp))
+        if (results.isEmpty()) {
+            EmptyCatalogPlaceholder(
+                if (query.isBlank()) "Тренировки появятся, когда будут доступны в каталоге."
+                else "По этому запросу ничего не найдено."
+            )
+        } else if (gridView) {
+            results.chunked(2).forEach { rowItems ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    rowItems.forEach { exercise ->
+                        GridWorkoutCard(
+                            exercise = exercise,
+                            modifier = Modifier.weight(1f).aspectRatio(0.82f),
+                            onClick = { onOpenExercise(exercise.id) }
+                        )
                     }
-                    Spacer(Modifier.height(12.dp))
+                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
                 }
-            } else {
-                results.forEach { exercise ->
-                    CatalogWorkoutRow(exercise) { onOpenExercise(exercise.id) }
-                    Spacer(Modifier.height(10.dp))
-                }
+                Spacer(Modifier.height(12.dp))
+            }
+        } else {
+            results.forEach { exercise ->
+                CatalogWorkoutRow(exercise) { onOpenExercise(exercise.id) }
+                Spacer(Modifier.height(10.dp))
             }
         }
         Spacer(Modifier.height(22.dp))
@@ -769,8 +791,11 @@ private fun StatCard(value: String, label: String, modifier: Modifier = Modifier
 private fun ProfileOverviewScreen(
     profile: UserProfile,
     isAdmin: Boolean,
+    roleLabel: String,
     onBack: () -> Unit,
     onOpenAdmin: () -> Unit,
+    onOpenPartners: () -> Unit,
+    onAddPartner: () -> Unit,
     onLogout: () -> Unit,
     onEditProfile: () -> Unit
 ) {
@@ -799,6 +824,24 @@ private fun ProfileOverviewScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
+                AppText(profile.displayName, 18, FontWeight.Bold)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isAdmin) Color(0xFFE8F2D8) else MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    AppText(
+                        when {
+                            isAdmin -> "Администратор · ADMIN"
+                            roleLabel.isNotBlank() -> "Роль · $roleLabel"
+                            else -> "Роль не указана"
+                        },
+                        11,
+                        FontWeight.SemiBold,
+                        color = if (isAdmin) Color(0xFF496900) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 TextButton(onClick = { }) {
                     AppText("Изменить фотографию", 14, FontWeight.SemiBold, color = Color(0xFF496900))
                 }
@@ -819,6 +862,7 @@ private fun ProfileOverviewScreen(
         ) {
             Column(Modifier.padding(horizontal = 15.dp)) {
                 ProfileMenuRow(Icons.Outlined.PersonOutline, "Мой профиль", onEditProfile)
+                ProfileMenuRow(Icons.Filled.Business, "Партнёры", onOpenPartners)
                 ProfileMenuRow(Icons.Outlined.FavoriteBorder, "Моё избранное") { }
                 ProfileMenuRow(Icons.Filled.FitnessCenter, "Настройка тренировки") { }
                 ProfileMenuRow(Icons.Filled.Settings, "Общие настройки") { }
@@ -843,8 +887,21 @@ private fun ProfileOverviewScreen(
                     Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
-            if (com.sportakus.auth.BuildConfig.DEBUG) {
-                AppText("Открыт предпросмотр админ-панели для debug-сборки", 10, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            Spacer(Modifier.height(10.dp))
+            Surface(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).clickable(onClick = onAddPartner),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, Color(0xFF79B505)),
+                shape = RoundedCornerShape(15.dp)
+            ) {
+                Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Add, null, tint = Color(0xFF79B505))
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        AppText("Добавить партнёра", 15, FontWeight.SemiBold)
+                        AppText("Создать новую карточку партнёра", 11, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -863,100 +920,185 @@ private fun ProfileStat(icon: androidx.compose.ui.graphics.vector.ImageVector, v
 }
 
 @Composable
-private fun ProfileEditScreen(profile: UserProfile, onBack: () -> Unit, onSave: (UserProfile) -> Unit) {
-    var fullName by rememberSaveable(profile.fullName, profile.login) { mutableStateOf(profile.fullName.ifBlank { profile.login }) }
-    var email by rememberSaveable(profile.email) { mutableStateOf(profile.email) }
-    var phoneDigits by rememberSaveable(profile.phone) { mutableStateOf(normalizeInternationalPhoneDigits(profile.phone)) }
-    var login by rememberSaveable(profile.login) { mutableStateOf(profile.login) }
-    var birthDate by rememberSaveable(profile.birthDate) { mutableStateOf(profile.birthDate) }
-    var height by rememberSaveable(profile.height) { mutableStateOf(profile.height) }
-    var weight by rememberSaveable(profile.weight) { mutableStateOf(profile.weight) }
-    var gender by rememberSaveable(profile.gender) { mutableStateOf(profileGenderForUi(profile.gender)) }
-    val changedProfile = profile.copy(
-        fullName = fullName.trim(), email = email.trim(),
-        phone = if (phoneDigits.isBlank()) "" else (formatPhoneForRegistrationApi(phoneDigits) ?: phoneDigits),
-        login = login.trim(), birthDate = birthDate.trim(), height = height.trim(),
-        weight = weight.trim(), gender = profileGenderForApi(gender)
-    )
+private fun ProfileEditScreen(
+    profile: UserProfile,
+    onBack: () -> Unit,
+    onRequestEmailCode: (String, (Boolean, String) -> Unit) -> Unit,
+    onSave: (ProfileUpdateRequest, (Boolean, String) -> Unit) -> Unit
+) {
+    var newLogin by rememberSaveable(profile.login) { mutableStateOf(profile.login) }
+    var newNickname by rememberSaveable(profile.nickname) { mutableStateOf(profile.nickname) }
+    var newEmail by rememberSaveable(profile.email) { mutableStateOf(profile.email) }
+    val originalPhoneDigits = remember(profile.phone) { normalizeInternationalPhoneDigits(profile.phone) }
+    var newPhoneDigits by rememberSaveable(profile.phone) { mutableStateOf(originalPhoneDigits) }
+    var newPassword by rememberSaveable { mutableStateOf("") }
+    var passwordChangeExpanded by rememberSaveable { mutableStateOf(false) }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    val originalWeight = profile.weight.toDoubleOrNull()?.toInt()?.toString() ?: profile.weight.trim()
+    val originalHeight = profile.height.toDoubleOrNull()?.toInt()?.toString() ?: profile.height.trim()
+    var weight by rememberSaveable(profile.weight) { mutableStateOf(originalWeight) }
+    var height by rememberSaveable(profile.height) { mutableStateOf(originalHeight) }
+    var emailCode by rememberSaveable { mutableStateOf("") }
+    var requestedEmail by rememberSaveable { mutableStateOf("") }
+    var requestInProgress by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var feedback by remember { mutableStateOf<String?>(null) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 112.dp)) {
+    val emailChanged = newEmail.trim() != profile.email.trim()
+    val loginChanged = newLogin.trim() != profile.login.trim()
+    val nicknameChanged = newNickname.trim() != profile.nickname.trim()
+    val phoneChanged = newPhoneDigits != originalPhoneDigits
+    val weightChanged = weight.trim() != originalWeight
+    val heightChanged = height.trim() != originalHeight
+
+    Column(
+        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp).padding(bottom = 112.dp)
+    ) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.size(42.dp)) {
                 Icon(Icons.Outlined.ArrowBack, contentDescription = "Назад", tint = MaterialTheme.colorScheme.onSurface)
             }
             AppText("Редактируемый профиль", 18, FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-            IconButton(onClick = { onSave(changedProfile) }, modifier = Modifier.size(42.dp)) {
-                Icon(Icons.Filled.Check, contentDescription = "Сохранить", tint = Color(0xFF79B505))
+            IconButton(
+                enabled = !saving,
+                onClick = {
+                    val loginPattern = Regex("^[A-Za-z_][A-Za-z0-9_]{0,49}$")
+                    val phonePattern = Regex("^\\+7 \\(\\d{3}\\) \\d{3}-\\d{2}-\\d{2}$")
+                    val formattedPhoneForApi = formatPhoneForRegistrationApi(newPhoneDigits)
+                    val passwordSpecial = "!\"#\$%&'()*+,-./:;<=>?@[]^{|}~"
+                    val passwordValid = !passwordChangeExpanded || newPassword.isBlank() || (
+                        newPassword.length >= 8 &&
+                            newPassword.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it in passwordSpecial } &&
+                            newPassword.any { it in 'A'..'Z' } &&
+                            newPassword.any { it in 'a'..'z' } &&
+                            newPassword.any { it.isDigit() } &&
+                            newPassword.any { it in passwordSpecial }
+                        )
+                    val weightValue = weight.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
+                    val heightValue = height.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
+                    val validation = when {
+                        loginChanged && newLogin.isNotBlank() && !loginPattern.matches(newLogin.trim()) -> "Логин должен начинаться с латинской буквы или _, содержать только A–Z, a–z, 0–9, _ и быть не длиннее 50 символов."
+                        emailChanged && newEmail.isNotBlank() && !Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(newEmail.trim()) -> "Введите корректный адрес электронной почты."
+                        emailChanged && newEmail.isNotBlank() && requestedEmail != newEmail.trim() -> "Сначала запросите код подтверждения для новой почты."
+                        emailChanged && newEmail.isNotBlank() && emailCode.isBlank() -> "Введите код из письма для подтверждения новой почты."
+                        phoneChanged && newPhoneDigits.isNotBlank() && (formattedPhoneForApi == null || !phonePattern.matches(formattedPhoneForApi)) -> "Телефон должен быть в формате +7 (999) 999-99-99."
+                        !passwordValid -> "Новый пароль должен содержать не менее 8 символов, заглавную и строчную буквы, цифру и специальный символ."
+                        weightChanged && weight.isNotBlank() && (weightValue == null || weightValue !in 0..700) -> "Вес должен быть целым числом от 0 до 700."
+                        heightChanged && height.isNotBlank() && (heightValue == null || heightValue !in 0..300) -> "Рост должен быть целым числом от 0 до 300."
+                        else -> null
+                    }
+                    if (validation != null) {
+                        feedback = validation
+                    } else {
+                        saving = true
+                        feedback = null
+                        val update = ProfileUpdateRequest(
+                            newLogin = newLogin.trim().takeIf { loginChanged && it.isNotEmpty() },
+                            newNickname = newNickname.trim().takeIf { nicknameChanged && it.isNotEmpty() },
+                            newEmail = newEmail.trim().takeIf { emailChanged && it.isNotEmpty() },
+                            emailCode = emailCode.trim().takeIf { emailChanged && it.isNotEmpty() },
+                            newPhone = formattedPhoneForApi.takeIf { phoneChanged && newPhoneDigits.isNotEmpty() },
+                            newPassword = newPassword.takeIf { passwordChangeExpanded && it.isNotEmpty() },
+                            weight = weightValue.takeIf { weightChanged },
+                            height = heightValue.takeIf { heightChanged }
+                        )
+                        onSave(update) { saved, message ->
+                            saving = false
+                            feedback = message
+                            if (saved) onBack()
+                        }
+                    }
+                },
+                modifier = Modifier.size(42.dp)
+            ) {
+                if (saving) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Filled.Check, contentDescription = "Сохранить", tint = Color(0xFF79B505))
             }
         }
         Spacer(Modifier.height(18.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.size(112.dp).clip(CircleShape).background(Color.Red))
-                TextButton(onClick = { }) {
-                    AppText("Изменить фотографию", 14, FontWeight.SemiBold, color = Color(0xFF496900))
-                }
+                TextButton(onClick = { }) { AppText("Изменить фотографию", 14, FontWeight.SemiBold, color = Color(0xFF496900)) }
             }
         }
         Spacer(Modifier.height(12.dp))
-        ProfileEditField("Полное имя", fullName, { fullName = it })
-        ProfileEditField("Почта", email, { email = it }, keyboardType = KeyboardType.Email)
-        ProfilePhoneEditField("Телефон", phoneDigits, { phoneDigits = normalizeInternationalPhoneDigits(it) })
-        ProfileEditField("Логин", login, { login = it })
-        ProfileEditField("День рождения", birthDate, { birthDate = it })
-        ProfileEditField("Рост", height, { height = it }, suffix = "см", keyboardType = KeyboardType.Number)
-        ProfileEditField("Вес", weight, { weight = it }, suffix = "кг", keyboardType = KeyboardType.Number)
-        ProfileEditRow(label = "Пол") {
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
-                listOf("Мужской", "Женский").forEach { option ->
-                    val selected = gender == option
-                    Surface(
-                        modifier = Modifier.weight(1f).height(42.dp).clickable { gender = option },
-                        shape = RoundedCornerShape(11.dp),
-                        color = if (selected) Color(0xFFE7F0D9) else MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, if (selected) Color(0xFF79B505) else MaterialTheme.colorScheme.outline)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            AppText(
-                                option,
-                                13,
-                                FontWeight.SemiBold,
-                                color = if (selected) Color(0xFF496900) else MaterialTheme.colorScheme.onSurface
-                            )
+        ProfileEditField("Логин", newLogin, { newLogin = it })
+        ProfileEditField("Никнейм", newNickname, { newNickname = it })
+        ProfileEditField("Электронная почта", newEmail, { newEmail = it }, keyboardType = KeyboardType.Email)
+        if (emailChanged) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    enabled = !requestInProgress && newEmail.isNotBlank(),
+                    onClick = {
+                        requestInProgress = true
+                        feedback = null
+                        onRequestEmailCode(newEmail.trim()) { success, message ->
+                            requestInProgress = false
+                            if (success) {
+                                requestedEmail = newEmail.trim()
+                                emailCode = ""
+                                feedback = "Код отправлен на ${newEmail.trim()}. Он действует 15 минут."
+                            } else feedback = message
                         }
-                    }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF79B505))
+                ) {
+                    if (requestInProgress) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                    else Text("Отправить код", color = Color.White)
                 }
             }
+            if (requestedEmail == newEmail.trim()) {
+                ProfileEditField("Код из письма", emailCode, { emailCode = it.filter(Char::isDigit).take(8) }, keyboardType = KeyboardType.Number)
+            }
+        }
+        ProfilePhoneEditField(
+            value = newPhoneDigits,
+            onValueChange = { newPhoneDigits = normalizeInternationalPhoneDigits(it) }
+        )
+        if (!passwordChangeExpanded) {
+            OutlinedButton(
+                onClick = { passwordChangeExpanded = true; newPassword = ""; passwordVisible = false },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AppText("Сменить пароль", 14, FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            }
+        } else {
+            ProfilePasswordField(
+                value = newPassword,
+                onValueChange = { newPassword = it },
+                visible = passwordVisible,
+                onToggleVisibility = { passwordVisible = !passwordVisible },
+                onCancel = {
+                    passwordChangeExpanded = false
+                    passwordVisible = false
+                    newPassword = ""
+                }
+            )
+        }
+        ProfileEditField("Рост", height, { height = it.filter(Char::isDigit) }, suffix = "см", keyboardType = KeyboardType.Number)
+        ProfileEditField("Вес", weight, { weight = it.filter(Char::isDigit) }, suffix = "кг", keyboardType = KeyboardType.Number)
+        ProfileReadOnlyField("День рождения", profile.birthDate)
+        ProfileReadOnlyField("Пол", profile.gender)
+        if (!feedback.isNullOrBlank()) {
+            Text(feedback!!, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), color = if (feedback!!.startsWith("Код отправлен")) Color(0xFF496900) else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(24.dp))
     }
 }
 
-private fun profileGenderForUi(value: String): String = when (value.trim().lowercase()) {
-    "мужчина", "мужской", "male", "man", "m" -> "Мужской"
-    "женщина", "женский", "female", "woman", "f" -> "Женский"
-    else -> ""
-}
-
-// Keep the same values used by the onboarding flow when sending the profile to the API.
-private fun profileGenderForApi(value: String): String = when (value) {
-    "Мужской" -> "Мужчина"
-    "Женский" -> "Женщина"
-    else -> ""
-}
-
 @Composable
-private fun ProfilePhoneEditField(label: String, digits: String, onValueChange: (String) -> Unit) {
+private fun ProfileReadOnlyField(label: String, value: String, suffix: String = "") {
     ProfileEditRow(label = label) {
-        BasicTextField(
-            value = digits,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-            visualTransformation = InternationalPhoneVisualTransformation,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.End)
+        val displayValue = if (value.isBlank()) "Не указано" else value
+        AppText(
+            if (suffix.isNotBlank() && value.isNotBlank()) "$displayValue $suffix" else displayValue,
+            13,
+            color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            maxLines = 2
         )
     }
 }
@@ -977,10 +1119,62 @@ private fun ProfileEditField(
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                visualTransformation = VisualTransformation.None,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.End)
             )
             if (suffix.isNotBlank()) {
                 AppText(" $suffix", 13, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfilePhoneEditField(value: String, onValueChange: (String) -> Unit) {
+    ProfileEditRow(label = "Телефон") {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            visualTransformation = InternationalPhoneVisualTransformation,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.End
+            )
+        )
+    }
+}
+
+@Composable
+private fun ProfilePasswordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    visible: Boolean,
+    onToggleVisibility: () -> Unit,
+    onCancel: () -> Unit
+) {
+    ProfileEditRow(label = "Новый пароль") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = if (visible) KeyboardType.Text else KeyboardType.Password),
+                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.End)
+            )
+            IconButton(onClick = onToggleVisibility, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (visible) "Скрыть пароль" else "Показать пароль",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.Close, contentDescription = "Отменить смену пароля", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
