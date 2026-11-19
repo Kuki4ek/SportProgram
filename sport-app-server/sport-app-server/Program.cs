@@ -22,6 +22,9 @@ namespace sport_app_server
     public record RefreshTokenRequest(string RefreshToken);
     public record RefreshTokenAnswer(string JWT, string RefreshToken);
     public record LogoutRequest(string RefreshToken);
+    public record UserInfoChangeRequest(string? NewLogin, string? NewNickname, string? NewEmail, string? EmailCode, string? NewPhone, string? NewPassword, int? Weight, int? Height);
+    public record EmailChangeRequest(string NewEmail);
+    public record PartnerRequest(string Name, string Logo, string ContactName, string ContactEmail, string ContactPhone);
     public class Program
     {
         
@@ -163,7 +166,6 @@ namespace sport_app_server
                     Device = httpContext.Request.Headers.UserAgent.ToString() ?? "unknown",
                     CreatedAt = DateTime.UtcNow,
                     Ip = httpContext.Connection.RemoteIpAddress,
-                    // User = newUser
                 };
                 db.RefreshTokens.Add(newRefreshToken);
                 await db.SaveChangesAsync();
@@ -235,9 +237,12 @@ namespace sport_app_server
             });
             app.MapGet("/api/users/me", async (ClaimsPrincipal user, sportappContext db) =>
             {
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 if (currentUser != null)
                 {
                     return Results.Ok(new
@@ -247,7 +252,8 @@ namespace sport_app_server
                         email = currentUser.Email,
                         createdAt = currentUser.CreatedAt,
                         balance = currentUser.Balance,
-                        daysStraight = currentUser.DaysStraight
+                        daysStraight = currentUser.DaysStraight,
+                        xpPoints = currentUser.XpPoints
                     });
                 }
                 else
@@ -532,10 +538,15 @@ namespace sport_app_server
             });
             app.MapPost("/api/auth/logout", async ([FromBody] LogoutRequest request, ClaimsPrincipal user, sportappContext db) =>
             {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
                 string hashedToken = Tools.HashString(request.RefreshToken);
                 RefreshToken? RefreshToken = await db.RefreshTokens.Include(rt => rt.User).FirstOrDefaultAsync(rt => rt.TokenHash == hashedToken);
-                var userLogin = user.FindFirst(ClaimTypes.Name)?.Value;
-                User? currentUser = await db.Users.FirstOrDefaultAsync(user => user.Login == userLogin);
                 if (RefreshToken != null && currentUser != null && RefreshToken.RevokedAt == null && RefreshToken.UserId == currentUser.Id)
                 {
                     RefreshToken.RevokedAt = DateTime.UtcNow;
@@ -543,6 +554,296 @@ namespace sport_app_server
                 await db.SaveChangesAsync();
                 return Results.Ok();
             }).RequireAuthorization();
+            app.MapPut("/api/users/me", async ([FromBody] UserInfoChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
+            {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+                if (currentUser == null)
+                {
+                    return Results.InternalServerError();
+                }
+                if (!string.IsNullOrEmpty(request.NewLogin))
+                {
+                    CheckResult loginCheck = Tools.CheckLogin(request.NewLogin);
+                    if (loginCheck.error)
+                    {
+                        errors["NewLogin"] = new[] { loginCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findLogin = (from findUser in users where findUser.Login == request.NewLogin select findUser).Count();
+                        if (findLogin > 0)
+                        {
+                            errors["NewLogin"] = new[] { "Текущий логин уже занят" };
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewNickname))
+                {
+                    CheckResult nicknameCheck = Tools.CheckNickname(request.NewNickname);
+                    if (nicknameCheck.error)
+                    {
+                        errors["NewNickname"] = new[] { nicknameCheck.errorMessage };
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewEmail))
+                {
+                    CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
+                    if (emailCheck.error)
+                    {
+                        errors["NewEmail"] = new[] { emailCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findEmail = (from findUser in users where findUser.Email == request.NewEmail select findUser).Count();
+                        if (findEmail > 0)
+                        {
+                            errors["NewEmail"] = new[] { "Текущая почта уже занята" };
+                        }
+                        else
+                        {
+                            string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                            string? codeHash = cache.Get<string>(cacheKey);
+                            if (string.IsNullOrEmpty(codeHash))
+                            {
+                                errors["email"] = new[] { "Запроса на подтверждение этой почты не обнаружено" };
+                            }
+                            else if (string.IsNullOrEmpty(request.EmailCode) || !BCrypt.Net.BCrypt.Verify(request.EmailCode, codeHash))
+                            {
+                                errors["email"] = new[] { "Код неверный" };
+                            }
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewPhone))
+                {
+                    CheckResult phoneCheck = Tools.CheckPhone(request.NewPhone);
+                    if (phoneCheck.error)
+                    {
+                        errors["NewPhone"] = new[] { phoneCheck.errorMessage };
+                    }
+                    else
+                    {
+                        int findPhone = (from findUser in users where findUser.PhoneNumber == request.NewPhone select findUser).Count();
+                        if (findPhone > 0)
+                        {
+                            errors["NewPhone"] = new[] { "Текущий номер уже занят" };
+                        }
+                    }
+                }
+                if (!string.IsNullOrEmpty(request.NewPassword))
+                {
+                    CheckResult passwordCheck = Tools.CheckPassword(request.NewPassword);
+                    if (passwordCheck.error)
+                    {
+                        errors["NewPassword"] = new[] { passwordCheck.errorMessage };
+                    }
+                }
+                if (request.Weight.HasValue)
+                {
+                    if (request.Weight.Value < 0 || request.Weight.Value > 700)
+                    {
+                        errors["Weight"] = new[] { "Вес находится в недопустимом диапазоне" };
+                    }
+                }
+                if (request.Height.HasValue)
+                {
+                    if (request.Height.Value < 0 || request.Height.Value > 300)
+                    {
+                        errors["Height"] = new[] { "Рост находится в недопустимом диапазоне" };
+                    }
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                if (!string.IsNullOrEmpty(request.NewLogin))
+                {
+                    currentUser.Login = request.NewLogin;
+                }
+                if (!string.IsNullOrEmpty(request.NewNickname))
+                {
+                    currentUser.Nickname = request.NewNickname;
+                }
+                if (!string.IsNullOrEmpty(request.NewEmail))
+                {
+                    currentUser.Email = request.NewEmail;
+                    string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                    cache.Remove(cacheKey);
+                }
+                if (!string.IsNullOrEmpty(request.NewPhone))
+                {
+                    currentUser.PhoneNumber = request.NewPhone;
+                }
+                if (!string.IsNullOrEmpty(request.NewPassword))
+                {
+                    currentUser.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
+                }
+                
+                if (request.Weight.HasValue || request.Height.HasValue)
+                {
+                    List<UserBodyMetric> metrics = new List<UserBodyMetric>();
+                    metrics = await db.UserBodyMetrics
+                                        .Where(m => m.UserId == currentUser.Id)
+                                        .OrderByDescending(m => m.RecordedAt)
+                                        .ToListAsync();
+                    UserBodyMetric newMetrics = new();
+                    newMetrics.UserId = currentUser.Id;
+                    if (metrics.Count > 0)
+                    {
+                        newMetrics.Height = metrics[0].Height;
+                        newMetrics.Weight = metrics[0].Weight;
+                    }
+                    newMetrics.Height = request.Height.HasValue ? request.Height.Value : newMetrics.Height;
+                    newMetrics.Weight = request.Weight.HasValue ? request.Weight.Value : newMetrics.Weight;
+                    newMetrics.Source = "PROFILE";
+                    newMetrics.RecordedAt = DateTime.UtcNow;
+
+                    db.UserBodyMetrics.Add(newMetrics);
+                }
+
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPost("/api/users/me/email-confirm", async ([FromBody] EmailChangeRequest request, ClaimsPrincipal user, sportappContext db, IMemoryCache cache) =>
+            {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var errors = new Dictionary<string, string[]>();
+                var users = await db.Users.ToListAsync();
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+                CheckResult emailCheck = Tools.CheckEmail(request.NewEmail);
+                if (emailCheck.error)
+                {
+                    errors["email"] = new[] { emailCheck.errorMessage };
+                }
+                int findEmail = (from findUser in users where findUser.Email == request.NewEmail select findUser).Count();
+                if (findEmail > 0)
+                {
+                    errors["NewEmail"] = new[] { "Текущая почта уже занята" };
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                if (currentUser == null)
+                    return Results.InternalServerError();    
+                string cacheKey = $"email_change_confirm_{request.NewEmail}";
+                string code = Tools.GenerateCode();
+                string codeHash = BCrypt.Net.BCrypt.HashPassword(code, workFactor: 12);
+                EmailData emailData = new EmailData("Подтверждение смены электронного адреса", EmailGenerator.GenerateCodeHTML(currentUser.Login, code));
+                if (EmailSender.SendEmail(currentUser.Login, request.NewEmail, emailData, emailKey).Result)
+                    cache.Set(cacheKey, codeHash, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)
+                    });
+                else
+                    return Results.InternalServerError();
+
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapGet("/api/partners", async (sportappContext db) =>
+            {
+                List<Partner> partners = await db.Partners.ToListAsync();
+                return Results.Ok(partners);
+            }).RequireAuthorization();
+            app.MapGet("/api/partners/{id:int}", async (int id, sportappContext db) =>
+            {
+                Partner? partner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (partner == null)
+                    return Results.NotFound();
+                return Results.Ok(partner);
+            }).RequireAuthorization();
+            app.MapPost("/api/partners", async (PartnerRequest request, sportappContext db) =>
+            {
+                CheckResult emailCheck = Tools.CheckEmail(request.ContactEmail);
+                CheckResult phoneCheck = Tools.CheckPhone(request.ContactPhone);
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error == true)
+                {
+                    errors["EmailCheck"] = new[] { emailCheck.errorMessage };
+                }
+                if (phoneCheck.error == true)
+                {
+                    errors["PhoneCheck"] = new[] { phoneCheck.errorMessage };
+                }
+                if (string.IsNullOrEmpty(request.Name))
+                {
+                    errors["Name"] = new[] { "Имя партнёра обязательно" };
+                }
+                if (string.IsNullOrEmpty(request.Logo))
+                {
+                    errors["Logo"] = new[] { "Логитип партнёра обязателен" };
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                Partner partner = new Partner();
+                partner.Name = request.Name;
+                partner.Logo = request.Logo;
+                partner.ContactName = request.ContactName;
+                partner.ContactEmail = request.ContactEmail;
+                partner.ContactPhone = request.ContactPhone;
+                db.Partners.Add(partner);
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapPut("/api/partners/{id:int}", async (int id, PartnerRequest request, sportappContext db) =>
+            {
+                
+                CheckResult emailCheck = Tools.CheckEmail(request.ContactEmail);
+                CheckResult phoneCheck = Tools.CheckPhone(request.ContactPhone);
+                var errors = new Dictionary<string, string[]>();
+                if (emailCheck.error == true)
+                {
+                    errors["EmailCheck"] = new[] { emailCheck.errorMessage };
+                }
+                if (phoneCheck.error == true)
+                {
+                    errors["PhoneCheck"] = new[] { phoneCheck.errorMessage };
+                }
+                if (string.IsNullOrEmpty(request.Name))
+                {
+                    errors["Name"] = new[] { "Имя партнёра обязательно" };
+                }
+                if (string.IsNullOrEmpty(request.Logo))
+                {
+                    errors["Logo"] = new[] { "Логитип партнёра обязателен" };
+                }
+                Partner? currentPartner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (currentPartner == null)
+                    return Results.NotFound();
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                currentPartner.Name = request.Name;
+                currentPartner.Logo = request.Logo;
+                currentPartner.ContactName = request.ContactName;
+                currentPartner.ContactEmail = request.ContactEmail;
+                currentPartner.ContactPhone = request.ContactPhone;
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapDelete("/api/partners/{id:int}", async (int id, sportappContext db) =>
+            {
+                var partner = await db.Partners.FirstOrDefaultAsync(p => p.Id == id);
+                if (partner == null)
+                    return Results.NotFound();
+
+                db.Partners.Remove(partner);
+                await db.SaveChangesAsync();
+
+                return Results.NoContent();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
             app.Run();
         }
         
