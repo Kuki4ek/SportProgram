@@ -922,12 +922,25 @@ namespace sport_app_server
                 var tags = await db.Tags
                     .Select(t => new
                     {
-                        t.Code,
+                        t.Id,
                         t.Name
                     })
                     .ToListAsync();
 
                 return Results.Ok(tags);
+            });
+            app.MapGet("/api/tags/{id:int}", async (int id, sportappContext db) =>
+            {
+                var tag = await db.Tags
+                    .Where(t => t.Id == id)
+                    .Select(t => new
+                    {
+                        t.Id,
+                        t.Name
+                    })
+                    .ToListAsync();
+
+                return Results.Ok(tag);
             });
             app.Run();
         }
