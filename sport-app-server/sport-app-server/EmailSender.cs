@@ -33,6 +33,7 @@ namespace sport_app_server
             }
             catch (Exception ex)
             {
+                Console.WriteLine(ex.ToString());
                 return false;
             }
         }

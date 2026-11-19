@@ -41,6 +41,10 @@ public partial class sportappContext : DbContext
 
     public virtual DbSet<UserAchievement> UserAchievements { get; set; }
 
+    public virtual DbSet<UserBodyMetric> UserBodyMetrics { get; set; }
+
+    public virtual DbSet<UserSurvey> UserSurveys { get; set; }
+
     public virtual DbSet<UserTask> UserTasks { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -113,6 +117,8 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("exercise_in_task");
 
+            entity.HasIndex(e => new { e.TaskId, e.OrderIndex }, "uq_exercise_in_task_order").IsUnique();
+
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.ExerciseId).HasColumnName("exercise_id");
             entity.Property(e => e.OrderIndex)
@@ -138,6 +144,8 @@ public partial class sportappContext : DbContext
             entity.HasKey(e => e.Id).HasName("exercise_journal_pkey");
 
             entity.ToTable("exercise_journal");
+
+            entity.HasIndex(e => e.UserTaskId, "idx_exercise_journal_task");
 
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
@@ -207,7 +215,7 @@ public partial class sportappContext : DbContext
                 .HasMaxLength(100)
                 .HasColumnName("contact_name");
             entity.Property(e => e.ContactPhone)
-                .HasMaxLength(20)
+                .HasMaxLength(25)
                 .HasColumnName("contact_phone");
             entity.Property(e => e.Logo)
                 .IsRequired()
@@ -224,7 +232,11 @@ public partial class sportappContext : DbContext
 
             entity.ToTable("promocodes");
 
+            entity.HasIndex(e => e.ClaimedByUserId, "idx_promocodes_claimed_by");
+
             entity.HasIndex(e => new { e.ItemId, e.Status }, "idx_promocodes_item_status").HasFilter("((status)::text = 'AVAILABLE'::text)");
+
+            entity.HasIndex(e => e.Code, "uq_promocodes_code").IsUnique();
 
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
@@ -259,6 +271,8 @@ public partial class sportappContext : DbContext
             entity.ToTable("refresh_tokens");
 
             entity.HasIndex(e => e.TokenHash, "idx_refresh_tokens_token_hash");
+
+            entity.HasIndex(e => e.UserId, "idx_refresh_tokens_user_id");
 
             entity.HasIndex(e => e.TokenHash, "refresh_tokens_token_hash_key").IsUnique();
 
@@ -401,11 +415,6 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
-            entity.Property(e => e.ActivityLevel)
-                .IsRequired()
-                .HasMaxLength(30)
-                .HasDefaultValueSql("'NOVICE'::character varying")
-                .HasColumnName("activity_level");
             entity.Property(e => e.Balance).HasColumnName("balance");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")
@@ -415,7 +424,6 @@ public partial class sportappContext : DbContext
                 .IsRequired()
                 .HasMaxLength(100)
                 .HasColumnName("email");
-            entity.Property(e => e.HasMedicalRestrictions).HasColumnName("has_medical_restrictions");
             entity.Property(e => e.LastActiveDate).HasColumnName("last_active_date");
             entity.Property(e => e.Login)
                 .IsRequired()
@@ -431,14 +439,6 @@ public partial class sportappContext : DbContext
             entity.Property(e => e.PhoneNumber)
                 .HasMaxLength(25)
                 .HasColumnName("phone_number");
-            entity.Property(e => e.PreferredDaysPerWeek)
-                .HasDefaultValue(3)
-                .HasColumnName("preferred_days_per_week");
-            entity.Property(e => e.PreferredDuration)
-                .IsRequired()
-                .HasMaxLength(20)
-                .HasDefaultValueSql("'5_10_MIN'::character varying")
-                .HasColumnName("preferred_duration");
             entity.Property(e => e.PremiumExpiresAt).HasColumnName("premium_expires_at");
             entity.Property(e => e.StreakFreezeUsedAt).HasColumnName("streak_freeze_used_at");
             entity.Property(e => e.UserRole)
@@ -470,6 +470,92 @@ public partial class sportappContext : DbContext
                 .HasConstraintName("user_achievements_user_id_fkey");
         });
 
+        modelBuilder.Entity<UserBodyMetric>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("user_body_metrics_pkey");
+
+            entity.ToTable("user_body_metrics");
+
+            entity.Property(e => e.Id)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("id");
+            entity.Property(e => e.Height).HasColumnName("height");
+            entity.Property(e => e.RecordedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("recorded_at");
+            entity.Property(e => e.Source)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasColumnName("source");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.Weight).HasColumnName("weight");
+
+            entity.HasOne(d => d.User).WithMany(p => p.UserBodyMetrics)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("user_body_metrics_user_id_fkey");
+        });
+
+        modelBuilder.Entity<UserSurvey>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("user_surveys_pkey");
+
+            entity.ToTable("user_surveys");
+
+            entity.Property(e => e.Id)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("id");
+            entity.Property(e => e.ActivityLevel)
+                .IsRequired()
+                .HasMaxLength(30)
+                .HasDefaultValueSql("'NOVICE'::character varying")
+                .HasColumnName("activity_level");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Goal).HasColumnName("goal");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.UserSurveys)
+                .HasForeignKey(d => d.UserId)
+                .HasConstraintName("user_surveys_user_id_fkey");
+
+            entity.HasMany(d => d.Tags).WithMany(p => p.Surveys)
+                .UsingEntity<Dictionary<string, object>>(
+                    "UserSurveyExcludedTag",
+                    r => r.HasOne<Tag>().WithMany()
+                        .HasForeignKey("TagId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("user_survey_excluded_tags_tag_id_fkey"),
+                    l => l.HasOne<UserSurvey>().WithMany()
+                        .HasForeignKey("SurveyId")
+                        .HasConstraintName("user_survey_excluded_tags_survey_id_fkey"),
+                    j =>
+                    {
+                        j.HasKey("SurveyId", "TagId").HasName("user_survey_excluded_tags_pkey");
+                        j.ToTable("user_survey_excluded_tags");
+                        j.IndexerProperty<Guid>("SurveyId").HasColumnName("survey_id");
+                        j.IndexerProperty<int>("TagId").HasColumnName("tag_id");
+                    });
+
+            entity.HasMany(d => d.TagsNavigation).WithMany(p => p.SurveysNavigation)
+                .UsingEntity<Dictionary<string, object>>(
+                    "UserSurveyRecommendedTag",
+                    r => r.HasOne<Tag>().WithMany()
+                        .HasForeignKey("TagId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("user_survey_recommended_tags_tag_id_fkey"),
+                    l => l.HasOne<UserSurvey>().WithMany()
+                        .HasForeignKey("SurveyId")
+                        .HasConstraintName("user_survey_recommended_tags_survey_id_fkey"),
+                    j =>
+                    {
+                        j.HasKey("SurveyId", "TagId").HasName("user_survey_recommended_tags_pkey");
+                        j.ToTable("user_survey_recommended_tags");
+                        j.IndexerProperty<Guid>("SurveyId").HasColumnName("survey_id");
+                        j.IndexerProperty<int>("TagId").HasColumnName("tag_id");
+                    });
+        });
+
         modelBuilder.Entity<UserTask>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("user_tasks_pkey");
@@ -477,6 +563,10 @@ public partial class sportappContext : DbContext
             entity.ToTable("user_tasks");
 
             entity.HasIndex(e => new { e.UserId, e.Status }, "idx_user_tasks_user_status");
+
+            entity.HasIndex(e => new { e.UserId, e.TaskId }, "uq_user_tasks_active")
+                .IsUnique()
+                .HasFilter("((status)::text = 'IN_PROGRESS'::text)");
 
             entity.Property(e => e.Id)
                 .HasDefaultValueSql("gen_random_uuid()")

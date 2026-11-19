@@ -75,6 +75,22 @@
          "ObjectType": 0
       },
       {
+         "Name": "public.user_body_metrics",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.user_survey_excluded_tags",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.user_survey_recommended_tags",
+         "ObjectType": 0
+      },
+      {
+         "Name": "public.user_surveys",
+         "ObjectType": 0
+      },
+      {
          "Name": "public.user_tasks",
          "ObjectType": 0
       },
