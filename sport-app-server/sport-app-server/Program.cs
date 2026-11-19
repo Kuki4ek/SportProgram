@@ -25,6 +25,7 @@ namespace sport_app_server
     public record UserInfoChangeRequest(string? NewLogin, string? NewNickname, string? NewEmail, string? EmailCode, string? NewPhone, string? NewPassword, int? Weight, int? Height);
     public record EmailChangeRequest(string NewEmail);
     public record PartnerRequest(string Name, string Logo, string ContactName, string ContactEmail, string ContactPhone);
+    public record TagsRequest(string Code, string Name);
     public class Program
     {
         
@@ -843,6 +844,27 @@ namespace sport_app_server
                 await db.SaveChangesAsync();
 
                 return Results.NoContent();
+            }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapPost("/api/tags", async ([FromBody] TagsRequest request, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                if (string.IsNullOrEmpty(request.Code) && request.Code.Length > 50)
+                {
+                    errors["Code"] = new[] { "Код некорректный" };
+                }
+                if(string.IsNullOrEmpty(request.Name) && request.Name.Length > 100)
+                {
+                    errors["Name"] = new[] { "Имя некорректно" };
+                }
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                Tag newTag = new Tag();
+                newTag.Code = request.Code;
+                newTag.Name = request.Name;
+                db.Tags.Add(newTag);
+                await db.SaveChangesAsync();
+                return Results.Ok();
             }).RequireAuthorization(p => p.RequireRole("ADMIN"));
             app.Run();
         }
