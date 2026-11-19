@@ -917,6 +917,18 @@ namespace sport_app_server
                 }
                 return Results.Ok();
             }).RequireAuthorization(p => p.RequireRole("ADMIN"));
+            app.MapGet("/api/tags", async (sportappContext db) =>
+            {
+                var tags = await db.Tags
+                    .Select(t => new
+                    {
+                        t.Code,
+                        t.Name
+                    })
+                    .ToListAsync();
+
+                return Results.Ok(tags);
+            });
             app.Run();
         }
         
