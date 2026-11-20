@@ -47,7 +47,7 @@ data class UserProfile(
     val login: String = "",
     val email: String = "",
     val phone: String = "",
-    val fullName: String = "",
+    val nickname: String = "",
     val birthDate: String = "",
     val height: String = "",
     val weight: String = "",
@@ -59,7 +59,7 @@ data class UserProfile(
     val activityValues: List<Int> = emptyList()
 ) {
     val displayName: String
-        get() = fullName.ifBlank { login.ifBlank { email.substringBefore('@') } }.ifBlank { "Спортсмен" }
+        get() = nickname.ifBlank { login.ifBlank { email.substringBefore('@') } }.ifBlank { "Спортсмен" }
 }
 
 sealed class CurrentUserApiResult {
@@ -78,6 +78,85 @@ sealed class CurrentUserApiResult {
         val renewedAccessToken: String? = null,
         val renewedRefreshToken: String? = null
     ) : CurrentUserApiResult()
+}
+
+
+
+/** Partial update contract for PUT /api/users/me (specification 18.11). */
+data class ProfileUpdateRequest(
+    val newLogin: String? = null,
+    val newNickname: String? = null,
+    val newEmail: String? = null,
+    val emailCode: String? = null,
+    val newPhone: String? = null,
+    val newPassword: String? = null,
+    val weight: Int? = null,
+    val height: Int? = null
+) {
+    val hasChanges: Boolean
+        get() = listOf(newLogin, newNickname, newEmail, newPhone, newPassword).any { !it.isNullOrBlank() } || weight != null || height != null
+}
+
+data class Partner(
+    val id: Int,
+    val name: String,
+    val logo: String,
+    val contactName: String = "",
+    val contactEmail: String,
+    val contactPhone: String
+)
+
+data class PartnerUpsertRequest(
+    val name: String,
+    val logo: String,
+    val contactName: String = "",
+    val contactEmail: String,
+    val contactPhone: String
+)
+
+sealed class PartnerListApiResult {
+    data class Success(
+        val partners: List<Partner>,
+        val httpStatus: Int,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerListApiResult()
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerListApiResult()
+}
+
+sealed class PartnerDetailsApiResult {
+    data class Success(
+        val partner: Partner,
+        val httpStatus: Int,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerDetailsApiResult()
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerDetailsApiResult()
+}
+
+sealed class PartnerMutationApiResult {
+    data class Success(
+        val httpStatus: Int,
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerMutationApiResult()
+    data class Failure(
+        val httpStatus: Int?,
+        val message: String,
+        val fieldErrors: Map<String, List<String>> = emptyMap(),
+        val renewedAccessToken: String? = null,
+        val renewedRefreshToken: String? = null
+    ) : PartnerMutationApiResult()
 }
 
 data class LoginApiRequest(val identifier: String, val password: String)
@@ -118,7 +197,8 @@ sealed class AuthActionApiResult {
         val httpStatus: Int?,
         val message: String,
         val renewedAccessToken: String? = null,
-        val renewedRefreshToken: String? = null
+        val renewedRefreshToken: String? = null,
+        val fieldErrors: Map<String, List<String>> = emptyMap()
     ) : AuthActionApiResult()
 }
 
@@ -127,7 +207,7 @@ sealed class RefreshTokenApiResult {
     data class Failure(val httpStatus: Int?, val message: String) : RefreshTokenApiResult()
 }
 
-/** API routes explicitly named in the backend specification dated 02.11. */
+/** API routes explicitly named in backend specifications dated 02.11 and 18.11. */
 object AuthEndpoints {
     const val EMAIL_CONFIRM = "/api/auth/email-confirm"
     const val REGISTER = "/api/auth/register"
@@ -139,6 +219,8 @@ object AuthEndpoints {
     const val LOGOUT = "/api/auth/logout"
     const val CURRENT_USER = "/api/users/me"
     const val UPDATE_CURRENT_USER = "/api/users/me"
+    const val CONFIRM_CURRENT_USER_EMAIL = "/api/users/me/email-confirm"
+    const val PARTNERS = "/api/partners"
 }
 
 /**
@@ -153,6 +235,8 @@ object AuthApi {
     ) {
         fun json(): JSONObject? = body.takeIf { it.isNotBlank() }
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        fun jsonArray(): JSONArray? = body.takeIf { it.isNotBlank() }
+            ?.let { runCatching { JSONArray(it) }.getOrNull() }
     }
 
     private data class AuthorizedHttpResult(
@@ -186,7 +270,7 @@ object AuthApi {
             connection.connectTimeout = 12_000
             connection.readTimeout = 15_000
             connection.useCaches = false
-            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Accept", "application/json, application/problem+json")
             if (payload != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -198,7 +282,11 @@ object AuthApi {
                 connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
             }
             val status = connection.responseCode
-            val responseStream = if (status >= 400) connection.errorStream else connection.inputStream
+            val responseStream = when {
+                status >= 400 -> connection.errorStream
+                status == 204 || status == 304 -> null
+                else -> connection.inputStream
+            }
             val body = responseStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             return HttpResult(status, body, connection.getHeaderField("Authorization"))
         } finally {
@@ -254,17 +342,23 @@ object AuthApi {
             ?.takeIf { it.isNotBlank() }
     }
 
-    private fun serverMessage(result: HttpResult, fallback: String): String =
-        errorFromJson(result) ?: when (result.status) {
+    private fun serverMessage(result: HttpResult, fallback: String): String {
+        val validationMessages = fieldErrors(result).values.flatten().distinct()
+        if (result.status == 400 && validationMessages.isNotEmpty()) {
+            return validationMessages.joinToString("\n")
+        }
+        return errorFromJson(result) ?: when (result.status) {
             400 -> "$fallback. Проверь переданные данные (HTTP 400)."
             401 -> "Сессия недействительна. Необходимо войти в приложение снова."
-            404 -> "Запрашиваемый endpoint не найден (HTTP 404). Проверь маршрут C# API."
+            403 -> "Недостаточно прав для выполнения операции (HTTP 403). Требуется роль ADMIN."
+            404 -> "Запрашиваемая запись или endpoint не найдены (HTTP 404)."
             409 -> "$fallback: такая запись уже существует (HTTP 409)."
             422 -> "$fallback: сервер отклонил формат данных (HTTP 422)."
             429 -> "Слишком много запросов. Подожди и попробуй ещё раз."
             in 500..599 -> "Ошибка сервера (${result.status}). Проверь журнал C# API."
             else -> "$fallback (HTTP ${result.status})."
         }
+    }
 
     private fun parseFieldErrors(errors: JSONObject?): Map<String, List<String>> {
         if (errors == null) return emptyMap()
@@ -282,7 +376,7 @@ object AuthApi {
                 is String -> listOf(value).filter { it.isNotBlank() }
                 else -> emptyList()
             }
-            if (messages.isNotEmpty()) parsed[key.lowercase()] = messages
+            if (messages.isNotEmpty()) parsed[key] = messages
         }
         return parsed
     }
@@ -632,23 +726,63 @@ object AuthApi {
         CurrentUserApiResult.Failure(null, networkErrorMessage(error))
     }
 
-    /** PUT /api/users/me. This user-profile route/DTO is outside the 02.11 auth specification. */
+    /** POST /api/users/me/email-confirm. A JWT is required by the 18.11 backend contract. */
+    fun requestCurrentUserEmailConfirmation(
+        baseUrl: String,
+        accessTokenValue: String,
+        storedRefreshToken: String?,
+        newEmail: String
+    ): AuthActionApiResult = try {
+        require(accessTokenValue.isNotBlank()) { "Сначала войдите в приложение." }
+        require(newEmail.isNotBlank()) { "Введите новый адрес электронной почты." }
+        val result = requestAuthorized(
+            baseUrl,
+            AuthEndpoints.CONFIRM_CURRENT_USER_EMAIL,
+            method = "POST",
+            payload = JSONObject().put("newEmail", newEmail.trim()),
+            accessTokenValue = accessTokenValue,
+            storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status in 200..299) {
+            AuthActionApiResult.Success(result.response.status, result.renewedAccessToken, result.renewedRefreshToken)
+        } else {
+            AuthActionApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось отправить код на новую почту"),
+                result.renewedAccessToken,
+                result.renewedRefreshToken,
+                fieldErrors(result.response)
+            )
+        }
+    } catch (error: Exception) {
+        AuthActionApiResult.Failure(null, networkErrorMessage(error))
+    }
+
+    /**
+     * PUT /api/users/me. Only non-blank changed values are included; the backend ignores
+     * null/empty values. Email changes must include a code previously requested from
+     * POST /api/users/me/email-confirm.
+     */
     fun updateCurrentUserProfile(
         baseUrl: String,
         accessTokenValue: String,
-        profile: UserProfile,
+        update: ProfileUpdateRequest,
         storedRefreshToken: String? = null
     ): AuthActionApiResult = try {
         require(accessTokenValue.isNotBlank()) { "Сначала войдите в приложение." }
+        require(update.hasChanges) { "Нет изменений для сохранения." }
+        if (!update.newEmail.isNullOrBlank()) {
+            require(!update.emailCode.isNullOrBlank()) { "Для изменения почты сначала запроси и введи код подтверждения." }
+        }
         val payload = JSONObject().apply {
-            put("login", profile.login)
-            put("email", profile.email)
-            put("phone", profile.phone)
-            put("fullName", profile.fullName)
-            put("birthDate", profile.birthDate)
-            put("height", profile.height)
-            put("weight", profile.weight)
-            put("gender", profile.gender)
+            update.newLogin?.trim()?.takeIf { it.isNotEmpty() }?.let { put("newLogin", it) }
+            update.newNickname?.trim()?.takeIf { it.isNotEmpty() }?.let { put("newNickname", it) }
+            update.newEmail?.trim()?.takeIf { it.isNotEmpty() }?.let { put("newEmail", it) }
+            update.emailCode?.trim()?.takeIf { it.isNotEmpty() && !update.newEmail.isNullOrBlank() }?.let { put("emailCode", it) }
+            update.newPhone?.trim()?.takeIf { it.isNotEmpty() }?.let { put("newPhone", it) }
+            update.newPassword?.takeIf { it.isNotEmpty() }?.let { put("newPassword", it) }
+            update.weight?.let { put("weight", it) }
+            update.height?.let { put("height", it) }
         }
         val result = requestAuthorized(
             baseUrl,
@@ -665,12 +799,140 @@ object AuthApi {
                 result.response.status,
                 result.refreshError ?: serverMessage(result.response, "Не удалось сохранить профиль"),
                 result.renewedAccessToken,
-                result.renewedRefreshToken
+                result.renewedRefreshToken,
+                fieldErrors(result.response)
             )
         }
     } catch (error: Exception) {
         AuthActionApiResult.Failure(null, networkErrorMessage(error))
     }
+
+    /** GET /api/partners. The response is a JSON array of partner objects. */
+    fun getPartners(baseUrl: String, jwt: String, storedRefreshToken: String?): PartnerListApiResult = try {
+        val result = requestAuthorized(
+            baseUrl, AuthEndpoints.PARTNERS, method = "GET", payload = null,
+            accessTokenValue = jwt, storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status !in 200..299) {
+            PartnerListApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось загрузить партнёров"),
+                result.renewedAccessToken, result.renewedRefreshToken
+            )
+        } else {
+            val array = result.response.jsonArray()
+                ?: result.response.json()?.let { obj ->
+                    obj.optJSONArray("data") ?: obj.optJSONArray("items") ?: obj.optJSONArray("partners")
+                }
+            if (array == null) PartnerListApiResult.Failure(
+                result.response.status, "Сервер вернул некорректный список партнёров.",
+                result.renewedAccessToken, result.renewedRefreshToken
+            ) else {
+                val parsed = buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        add(parsePartner(item))
+                    }
+                }
+                PartnerListApiResult.Success(parsed, result.response.status, result.renewedAccessToken, result.renewedRefreshToken)
+            }
+        }
+    } catch (error: Exception) {
+        PartnerListApiResult.Failure(null, networkErrorMessage(error))
+    }
+
+    /** GET /api/partners/{id}. */
+    fun getPartnerById(baseUrl: String, jwt: String, storedRefreshToken: String?, id: Int): PartnerDetailsApiResult = try {
+        require(id > 0) { "Некорректный ID партнёра." }
+        val result = requestAuthorized(
+            baseUrl, "${AuthEndpoints.PARTNERS}/$id", method = "GET", payload = null,
+            accessTokenValue = jwt, storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status !in 200..299) {
+            PartnerDetailsApiResult.Failure(
+                result.response.status,
+                result.refreshError ?: serverMessage(result.response, "Не удалось загрузить партнёра"),
+                result.renewedAccessToken, result.renewedRefreshToken
+            )
+        } else {
+            val json = result.response.json()
+            val partnerJson = json?.optJSONObject("data") ?: json?.optJSONObject("partner") ?: json
+            if (partnerJson == null) PartnerDetailsApiResult.Failure(
+                result.response.status, "Сервер вернул некорректные данные партнёра.",
+                result.renewedAccessToken, result.renewedRefreshToken
+            ) else PartnerDetailsApiResult.Success(
+                parsePartner(partnerJson), result.response.status,
+                result.renewedAccessToken, result.renewedRefreshToken
+            )
+        }
+    } catch (error: Exception) {
+        PartnerDetailsApiResult.Failure(null, networkErrorMessage(error))
+    }
+
+    /** POST /api/partners. Backend enforces role ADMIN; HTTP 403 is surfaced to the UI. */
+    fun createPartner(baseUrl: String, jwt: String, storedRefreshToken: String?, partner: PartnerUpsertRequest): PartnerMutationApiResult =
+        mutatePartner(baseUrl, jwt, storedRefreshToken, AuthEndpoints.PARTNERS, "POST", partner)
+
+    /** PUT /api/partners/{id}; full replacement per backend contract. */
+    fun updatePartner(baseUrl: String, jwt: String, storedRefreshToken: String?, id: Int, partner: PartnerUpsertRequest): PartnerMutationApiResult =
+        mutatePartner(baseUrl, jwt, storedRefreshToken, "${AuthEndpoints.PARTNERS}/$id", "PUT", partner)
+
+    private fun mutatePartner(
+        baseUrl: String, jwt: String, storedRefreshToken: String?, path: String, method: String,
+        partner: PartnerUpsertRequest
+    ): PartnerMutationApiResult = try {
+        require(jwt.isNotBlank()) { "Сначала войдите в приложение." }
+        require(partner.name.isNotBlank()) { "Введите название партнёра." }
+        require(partner.logo.isNotBlank()) { "Укажите логотип партнёра." }
+        require(partner.contactEmail.isNotBlank()) { "Введите контактную почту." }
+        require(partner.contactPhone.isNotBlank()) { "Введите контактный телефон." }
+        val payload = JSONObject().apply {
+            put("name", partner.name.trim())
+            put("logo", partner.logo.trim())
+            put("contactName", partner.contactName.trim())
+            put("contactEmail", partner.contactEmail.trim())
+            put("contactPhone", partner.contactPhone.trim())
+        }
+        val result = requestAuthorized(
+            baseUrl, path, method, payload, jwt, storedRefreshToken
+        )
+        if (result.response.status in 200..299) PartnerMutationApiResult.Success(
+            result.response.status, result.renewedAccessToken, result.renewedRefreshToken
+        ) else PartnerMutationApiResult.Failure(
+            result.response.status,
+            result.refreshError ?: serverMessage(result.response, "Не удалось сохранить партнёра"),
+            fieldErrors(result.response), result.renewedAccessToken, result.renewedRefreshToken
+        )
+    } catch (error: Exception) {
+        PartnerMutationApiResult.Failure(null, networkErrorMessage(error))
+    }
+
+    /** DELETE /api/partners/{id}. */
+    fun deletePartner(baseUrl: String, jwt: String, storedRefreshToken: String?, id: Int): PartnerMutationApiResult = try {
+        require(id > 0) { "Некорректный ID партнёра." }
+        val result = requestAuthorized(
+            baseUrl, "${AuthEndpoints.PARTNERS}/$id", method = "DELETE", payload = null,
+            accessTokenValue = jwt, storedRefreshToken = storedRefreshToken
+        )
+        if (result.response.status in 200..299) PartnerMutationApiResult.Success(
+            result.response.status, result.renewedAccessToken, result.renewedRefreshToken
+        ) else PartnerMutationApiResult.Failure(
+            result.response.status,
+            result.refreshError ?: serverMessage(result.response, "Не удалось удалить партнёра"),
+            fieldErrors(result.response), result.renewedAccessToken, result.renewedRefreshToken
+        )
+    } catch (error: Exception) {
+        PartnerMutationApiResult.Failure(null, networkErrorMessage(error))
+    }
+
+    private fun parsePartner(json: JSONObject): Partner = Partner(
+        id = json.optInt("id", 0),
+        name = json.optString("name", ""),
+        logo = json.optString("logo", ""),
+        contactName = json.optString("contactName", ""),
+        contactEmail = json.optString("contactEmail", ""),
+        contactPhone = json.optString("contactPhone", "")
+    )
 
     private fun parseUserProfile(root: JSONObject): UserProfile {
         val data = root.optJSONObject("data") ?: root
@@ -723,10 +985,10 @@ object AuthApi {
         }.orEmpty()
 
         return UserProfile(
-            login = string("login", "nickname", "username", "userName"),
+            login = string("login", "username", "userName"),
             email = string("email", "mail"),
             phone = string("phone", "phoneNumber", "phone_number"),
-            fullName = string("fullName", "full_name", "name", "displayName", "display_name"),
+            nickname = string("nickname", "nickName", "nick_name"),
             birthDate = string("birthDate", "birth_date", "dateOfBirth", "date_of_birth"),
             height = string("height", "heightCm", "height_cm"),
             weight = string("weight", "weightKg", "weight_kg"),

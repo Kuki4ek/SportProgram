@@ -3,7 +3,6 @@ package com.sportakus.auth.ui
 import com.sportakus.auth.ui.theme.sportakusTextColor
 import com.sportakus.auth.ui.theme.sportakusSecondaryTextColor
 import com.sportakus.auth.ui.theme.sportakusInputBackground
-import com.sportakus.auth.ui.theme.sportakusInputTextColor
 import com.sportakus.auth.ui.theme.sportakusPrimaryActionTextColor
 
 import androidx.compose.foundation.BorderStroke
@@ -75,15 +74,18 @@ import androidx.compose.ui.unit.sp
 import com.sportakus.auth.ui.theme.SportakusActionGreen
 import com.sportakus.auth.R
 
+private val AuthInk = Color(0xFF171A14)
+private val AuthMutedInk = Color(0xFF555B50)
+private val AuthErrorInk = Color(0xFFBA1A1A)
+private val AuthCursorGreen = Color(0xFF79B505)
 
-// Always read foreground colors from the active MaterialTheme rather than a
-// separately passed Boolean. This keeps every text element synchronized with the
-// actual color scheme when the user switches themes.
+// V2 is light-only: keep auth text colors fixed and independent of inherited
+// content colors so input values and validation hints remain legible.
 @Composable
-private fun authForeground(): Color = sportakusTextColor()
+private fun authForeground(): Color = AuthInk
 
 @Composable
-private fun authSecondaryForeground(): Color = sportakusSecondaryTextColor()
+private fun authSecondaryForeground(): Color = AuthMutedInk
 
 @Composable
 private fun authButtonForeground(): Color = sportakusPrimaryActionTextColor()
@@ -246,7 +248,7 @@ fun RegistrationScreen(
             darkTheme = darkTheme,
             value = username,
             onValueChange = onUsernameChange,
-            placeholder = "Твоё имя",
+            placeholder = "Логин",
             leadingIcon = Icons.Outlined.PersonOutline,
             validationError = usernameError,
             imeAction = ImeAction.Next
@@ -461,7 +463,8 @@ fun ResetPasswordScreen(
     darkTheme: Boolean,
     onToggleTheme: () -> Unit,
     onBack: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    passwordValidationError: String? = null
 ) {
     Column(
         modifier = Modifier
@@ -480,7 +483,7 @@ fun ResetPasswordScreen(
             color = sportakusTextColor())
         Spacer(Modifier.height(8.dp))
         DarkText(
-            text = "Используйте не менее 8 символов.",
+            text = "Используйте от 8 символов, заглавные и строчные латинские буквы, цифру и спецсимвол.",
             fontSize = 16.sp,
             color = sportakusTextColor())
         Spacer(Modifier.height(24.dp))
@@ -491,7 +494,7 @@ fun ResetPasswordScreen(
             placeholder = "Новый пароль",
             leadingIcon = Icons.Outlined.Lock,
             isPassword = true,
-            validatePasswordLength = true,
+            validationError = passwordValidationError,
             imeAction = ImeAction.Next
         )
         Spacer(Modifier.height(12.dp))
@@ -594,7 +597,7 @@ private fun AuthTextField(
             DarkText(
                 text = validationError,
                 modifier = Modifier.padding(start = 4.dp, top = 5.dp),
-                color = sportakusTextColor(),
+                color = AuthErrorInk,
                 fontSize = 12.sp,
                 lineHeight = 15.sp
             )
@@ -602,7 +605,7 @@ private fun AuthTextField(
             DarkText(
                 text = if (passwordLengthInvalid) "Минимум $minimumPasswordLength символов" else "Длина пароля подходит",
                 modifier = Modifier.padding(start = 4.dp, top = 5.dp),
-                color = sportakusTextColor(),
+                color = if (passwordLengthInvalid) AuthErrorInk else AuthMutedInk,
                 fontSize = 12.sp,
                 lineHeight = 15.sp
             )
@@ -635,8 +638,8 @@ private fun varPasswordField(
     val valueLooksLikePhone = value.isNotBlank() && value.all { it.isDigit() || it in "+ ()-" }
     val isPhoneField = keyboardType == KeyboardType.Phone || (autoFormatPhone && valueLooksLikePhone)
     val fieldValue = if (isPhoneField) normalizeInternationalPhoneDigits(value) else value
-    val fieldForeground = sportakusInputTextColor()
-    val fieldMutedForeground = sportakusSecondaryTextColor()
+    val fieldForeground = AuthInk
+    val fieldMutedForeground = AuthMutedInk
     val fieldShape = RoundedCornerShape(14.dp)
 
     Row(
@@ -671,7 +674,7 @@ private fun varPasswordField(
             if (fieldValue.isEmpty() && (!isPhoneField || !focused)) {
                 DarkText(
                     text = placeholder,
-                    color = fieldForeground,
+                    color = AuthMutedInk,
                     fontSize = 16.sp,
                     maxLines = 1
                 )
@@ -698,7 +701,7 @@ private fun varPasswordField(
                         fontSize = 16.sp,
                         textDecoration = TextDecoration.None
                     ),
-                    cursorBrush = SolidColor(fieldForeground),
+                    cursorBrush = SolidColor(AuthCursorGreen),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (isPassword && keyboardType == KeyboardType.Text) KeyboardType.Password else keyboardType,
                         imeAction = imeAction
