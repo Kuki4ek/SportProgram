@@ -12,20 +12,28 @@
 
 ## Структура репозитория
 
+```text
 SportProgram/
-|
-|- 🗂️ .github/    		          <--- Директория с настройками CI
-|   |   
-|   |- 🗂️ actions/              <--- Директория с кастомными Actions
-|   |   
-|   |- 🗂️ workflows/            <--- Директория с пайплайнами
-|   
-|- 🗂️ docs/    			            <--- Директория документации
-|   
-|- 🗂️ sport-app-android/  	    <--- Директория проекта Android-клиента
-|   
-|- 🗂️ sport-app-server/   	    <--- Директория проекта серверной части приложения
-|   |
-|   |- 🗂️ sport-app-server/     <--- Директория исходного кода серверной части
-|
-|- 📄 Readme.md
+├── 🗂️ .github/                      <--- Настройки CI
+│   ├── 🗂️ actions/                  <--- Кастомные GitHub Actions
+│   │   └── 🗂️ setup-android/        <--- Установка JDK 17 и Android SDK
+│   └── 🗂️ workflows/                <--- Пайплайны CI/CD
+├── 🗂️ docs/                         <--- Документация
+│   └── 📄️ API.md                    <--- Описание REST API
+├── 🗂️ sport-app-android/            <--- Проект Android-клиента
+│   ├── 🗂️ app/                      <--- Модуль приложения (UI, сеть, тесты)
+│   ├── 🗂️ gradle/                   <--- Gradle Wrapper
+│   ├── 📄️ build.gradle.kts          <--- Конфигурация сборки
+│   └── 📄️ settings.gradle.kts       <--- Настройки Gradle-проекта
+├── 🗂️ sport-app-server/             <--- Проект серверной части приложения
+│   ├── 📄️ compose.yaml              <--- Docker Compose (БД + API)
+│   └── 🗂️ sport-app-server/         <--- Исходный код серверной части
+│       ├── 🗂️ Models/               <--- Модели сущностей БД
+│       ├── 🗂️ Properties/           <--- Параметры запуска
+│       ├── 📄️ Program.cs            <--- Точка входа и REST API
+│       └── 📄️ Dockerfile            <--- Образ для сборки и публикации
+├── 🗂️ test_data/                    <--- Тестовые данные
+│   └── 📄️ test.sql                  <--- Скрипты наполнения БД
+├── 📄️ schema.sql                    <--- Схема базы данных
+└── 📄️ Readme.md
+```
