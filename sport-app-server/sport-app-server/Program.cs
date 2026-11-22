@@ -26,8 +26,8 @@ namespace sport_app_server
     public record EmailChangeRequest(string NewEmail);
     public record PartnerRequest(string Name, string Logo, string ContactName, string ContactEmail, string ContactPhone);
     public record TagsRequest(string Code, string Name);
-    public record SurveyRequest(List<int>? RecommendedTagsId, List<int>? ExcludedTagsId, int? Weight, int? Height, string? UserGoal);
-    public record GoalRequst(string goal);
+    public record SurveyRequest(List<int>? RecommendedTagsId, List<int>? ExcludedTagsId, int? Weight, int? Height, string? Goal);
+    public record GoalRequst(string Goal);
     public class Program
     {
         
@@ -1008,7 +1008,7 @@ namespace sport_app_server
                 UserSurvey userSurvey = new UserSurvey();
 
                 userSurvey.UserId = currentUser.Id;
-                userSurvey.Goal = string.IsNullOrEmpty(request.UserGoal) ? null : request.UserGoal;
+                userSurvey.Goal = string.IsNullOrEmpty(request.Goal) ? null : request.Goal;
                 userSurvey.ActivityLevel = "NOVICE";
                 userSurvey.CreatedAt = DateTime.UtcNow;
 
@@ -1050,8 +1050,8 @@ namespace sport_app_server
 
                 var survey = await db.UserSurveys.FirstOrDefaultAsync(s => s.UserId == currentUser.Id);
                 if (survey == null)
-                    return Results.InternalServerError();
-                survey.Goal = request.goal;
+                    return Results.NotFound();
+                survey.Goal = request.Goal;
                 await db.SaveChangesAsync();
                 return Results.Ok();
             }).RequireAuthorization();
