@@ -26,6 +26,8 @@ namespace sport_app_server
     public record EmailChangeRequest(string NewEmail);
     public record PartnerRequest(string Name, string Logo, string ContactName, string ContactEmail, string ContactPhone);
     public record TagsRequest(string Code, string Name);
+    public record SurveyRequest(List<int>? RecommendedTagsId, List<int>? ExcludedTagsId, int? Weight, int? Height, string? UserGoal);
+    public record GoalRequst(string goal);
     public class Program
     {
         
@@ -942,6 +944,117 @@ namespace sport_app_server
 
                 return Results.Ok(tag);
             });
+            app.MapPost("/api/users/me/survey", async ([FromBody] SurveyRequest request, ClaimsPrincipal user, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var users = await db.Users.ToListAsync();
+                var tags = db.Tags;
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+                if (currentUser == null)
+                    return Results.InternalServerError();
+
+                var userSurveys = await db.UserSurveys.Where(s => s.UserId == currentUser.Id).ToListAsync();
+                if (userSurveys.Count > 0)
+                    errors["Surveys"] = new[] { "Анкета уже была создана" };
+
+                if (!request.Weight.HasValue)
+                    errors["Weight"] = new[] { "Вес обязателен" };
+                else if (request.Weight.Value < 0 || request.Weight.Value > 700)
+                    errors["Weight"] = new[] { "Вес в недопустимом диапазоне" };
+
+                if (!request.Height.HasValue)
+                    errors["Height"] = new[] { "Рост обязателен" };
+                else if (request.Height.Value < 0 || request.Height.Value > 300)
+                    errors["Height"] = new[] { "Рост в недопустимом диапазоне" };
+
+                if (request.RecommendedTagsId != null || request.ExcludedTagsId != null)
+                {
+                    if (request.RecommendedTagsId != null)
+                    {
+                        foreach (var tagId in request.RecommendedTagsId)
+                        {
+                            if (!await tags.AnyAsync(t => t.Id == tagId))
+                                errors["RecommendedTagsId"] = new[] { $"Тега с номером {tagId} не существует" };
+                        }
+                    }
+                    if (request.ExcludedTagsId != null)
+                    {
+                        foreach (var tagId in request.ExcludedTagsId)
+                        {
+                            if (!await tags.AnyAsync(t => t.Id == tagId))
+                                errors["ExcludedTagsId"] = new[] { $"Тега с номером {tagId} не существует" };
+                        }
+                    }
+                }
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                if (request.Height.HasValue && request.Weight.HasValue)
+                {
+                    UserBodyMetric metric = new UserBodyMetric();
+                    metric.UserId = currentUser.Id;
+                    metric.Height = request.Height;
+                    metric.Weight = request.Weight;
+                    metric.Source = "SURVEY";
+                    metric.RecordedAt = DateTime.UtcNow;
+                    await db.UserBodyMetrics.AddAsync(metric);
+                }
+
+                UserSurvey userSurvey = new UserSurvey();
+
+                userSurvey.UserId = currentUser.Id;
+                userSurvey.Goal = string.IsNullOrEmpty(request.UserGoal) ? null : request.UserGoal;
+                userSurvey.ActivityLevel = "NOVICE";
+                userSurvey.CreatedAt = DateTime.UtcNow;
+
+                await db.UserSurveys.AddAsync(userSurvey);
+                if (request.RecommendedTagsId != null)
+                {
+                    foreach (var id in request.RecommendedTagsId.Distinct())
+                    {
+                        var tag = await tags.FindAsync(id);
+                        if (tag != null)
+                        {
+                            userSurvey.TagsNavigation.Add(tag);
+                        }
+                    }
+                }
+                if (request.ExcludedTagsId != null)
+                {
+                    foreach (var id in request.ExcludedTagsId.Distinct())
+                    {
+                        var tag = await tags.FindAsync(id);
+                        if (tag != null)
+                        {
+                            userSurvey.Tags.Add(tag);
+                        }
+                    }
+                }
+
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPut("/api/users/me/goal", async ([FromBody] GoalRequst request, ClaimsPrincipal user, sportappContext db) =>
+            {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+                if (currentUser == null) return Results.InternalServerError();
+
+                var survey = await db.UserSurveys.FirstOrDefaultAsync(s => s.UserId == currentUser.Id);
+                if (survey == null)
+                    return Results.InternalServerError();
+                survey.Goal = request.goal;
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
             app.Run();
         }
         
