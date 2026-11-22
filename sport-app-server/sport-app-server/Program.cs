@@ -28,6 +28,7 @@ namespace sport_app_server
     public record TagsRequest(string Code, string Name);
     public record SurveyRequest(List<int>? RecommendedTagsId, List<int>? ExcludedTagsId, int? Weight, int? Height, string? Goal);
     public record GoalRequst(string Goal);
+    public record TagsRequst(List<int>? TagsId);
     public class Program
     {
         
@@ -1052,6 +1053,98 @@ namespace sport_app_server
                 if (survey == null)
                     return Results.NotFound();
                 survey.Goal = request.Goal;
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPut("/api/users/me/recomended-tags", async ([FromBody] TagsRequst request, ClaimsPrincipal user, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var users = await db.Users.ToListAsync();
+                var tags = db.Tags;
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+
+                if (currentUser == null)
+                    return Results.InternalServerError();
+
+                if (request.TagsId != null)
+                {
+                    foreach (var tagId in request.TagsId)
+                    {
+                        if (!await tags.AnyAsync(t => t.Id == tagId))
+                            errors["TagsId"] = new[] { $"Тега с номером {tagId} не существует" };
+                    }
+                }
+                var survey = await db.UserSurveys.Include(s => s.TagsNavigation).FirstOrDefaultAsync(s => s.UserId == currentUser.Id);
+                if (survey == null)
+                    errors["Survey"] = new[] { "Анкета не найдена" };
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+                
+                if (request.TagsId != null && survey != null)
+                {
+                    survey.TagsNavigation.Clear();
+                    foreach (var id in request.TagsId.Distinct())
+                    {
+                        var tag = await tags.FindAsync(id);
+                        if (tag != null)
+                        {
+                            survey.TagsNavigation.Add(tag);
+                        }
+                    }
+                }
+                else
+                    return Results.NotFound();
+                await db.SaveChangesAsync();
+                return Results.Ok();
+            }).RequireAuthorization();
+            app.MapPut("/api/users/me/excluded-tags", async ([FromBody] TagsRequst request, ClaimsPrincipal user, sportappContext db) =>
+            {
+                var errors = new Dictionary<string, string[]>();
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var users = await db.Users.ToListAsync();
+                var tags = db.Tags;
+                Guid userGuid;
+                if (userId == null || !Guid.TryParse(userId, out userGuid))
+                    return Results.InternalServerError();
+                User? currentUser = await db.Users.FirstOrDefaultAsync(user_ => user_.Id == userGuid);
+
+                if (currentUser == null)
+                    return Results.InternalServerError();
+
+                if (request.TagsId != null)
+                {
+                    foreach (var tagId in request.TagsId)
+                    {
+                        if (!await tags.AnyAsync(t => t.Id == tagId))
+                            errors["TagsId"] = new[] { $"Тега с номером {tagId} не существует" };
+                    }
+                }
+                var survey = await db.UserSurveys.Include(s => s.Tags).FirstOrDefaultAsync(s => s.UserId == currentUser.Id);
+                if (survey == null)
+                    errors["Survey"] = new[] { "Анкета не найдена" };
+
+                if (errors.Count > 0)
+                    return Results.ValidationProblem(errors);
+
+                if (request.TagsId != null && survey != null)
+                {
+                    survey.Tags.Clear();
+                    foreach (var id in request.TagsId.Distinct())
+                    {
+                        var tag = await tags.FindAsync(id);
+                        if (tag != null)
+                        {
+                            survey.Tags.Add(tag);
+                        }
+                    }
+                }
+                else
+                    return Results.NotFound();
                 await db.SaveChangesAsync();
                 return Results.Ok();
             }).RequireAuthorization();
