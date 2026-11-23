@@ -6,8 +6,5 @@
         <item name="android:statusBarColor">#F5F7F2</item>
         <item name="android:navigationBarColor">#F5F7F2</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <!-- This app is light-only. Prevent Android 10+ Force Dark from recoloring Compose content. -->
-        <item name="android:forceDarkAllowed">false</item>
-        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>
