@@ -11,8 +11,8 @@ android {
         applicationId = "com.sportakus.auth.v2"
         minSdk = 24
         targetSdk = 34
-        versionCode = 40
-        versionName = "2.0.14.1-light"
+        versionCode = 42
+        versionName = "2.0.14.3-light"
     }
 
     buildTypes {
