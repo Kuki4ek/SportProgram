@@ -210,7 +210,7 @@ dependencies {
 
 ---
 
-## 8. Раунды 3–4 CI: testReleaseUnitTest и ui-test-manifest
+## 8. Раунды 3–5 CI: testReleaseUnitTest и ui-test-manifest
 
 CI-шаг `./gradlew --no-daemon test` запускает ОБЕ задачи юнит-тестов:
 `testDebugUnitTest` И `testReleaseUnitTest`. При этом
@@ -223,22 +223,30 @@ CI дошёл до release — отсюда «снова провалы» со 1
 UI-классов при полностью зелёных `AuthApiTest`/`TokenStoreTest`
 (Robolectric без Activity работает в обоих вариантах).
 
-Что сделано в тестах (две попытки). Первая — @Before-guard
+Что сделано в тестах (три попытки). Первая — @Before-guard
 `assumeTrue(BuildConfig.DEBUG)` — оказалась БЕСПОЛЕЗНОЙ: правило
 `AndroidComposeTestRule` запускает ComponentActivity из своего
 statement ещё ДО @Before, поэтому в release каждый тест падал с
 `RuntimeException at RoboMonitoringInstrumentation.java:105`,
 не доходя до guard-а (CI это показал: все 26 UI-тестов release
-FAILED, а не skipped). Рабочее решение: поле правила сделано
-условным — в debug создаётся настоящее Compose-правило
-(`createComposeRule()`), в release подставляется
-`DebugVariantSkipRule` (новый тест-файл
-`app/src/test/java/com/sportakus/auth/ui/DebugVariantSkipRule.kt`),
-который помечает все тесты класса пропущенными ДО попытки запуска
-Activity. Тесты обращаются к правилу через свойство-accessor
-`composeRule: ComposeContentTestRule`; в release тела тестов не
-выполняются. `./gradlew test` теперь зелёный при любом варианте
-запуска.
+FAILED, а не skipped). Вторая — условное поле правила + accessor
+`composeRule: ComposeContentTestRule` — не СКОМПИЛИРОВАЛАСЬ:
+тип `androidx.compose.ui.test.ComposeContentTestRule` не входит
+в публичный API compose 1.5.0 (Unresolved reference;
+`compileDebugUnitTestKotlin` FAILED — см. лог раунда 4).
+Рабочее решение: ClassRule-guard. В каждом UI-классе добавлен
+companion-объект с `@ClassRule @JvmField val debugVariantGuard:
+TestRule = if (BuildConfig.DEBUG) ExternalResource() else
+DebugVariantSkipRule()` (правило-пропуск — новый тест-файл
+`app/src/test/java/com/sportakus/auth/ui/DebugVariantSkipRule.kt`,
+его statement бросает AssumptionViolatedException). ClassRule
+выполняется РАНЬШЕ правил уровня метода: в release класс
+пропускается целиком до какой-либо попытки запустить Activity
+(ни createComposeRule(), ни statement Compose-правила не
+выполняются), в debug guard — no-op. Само Compose-правило
+вернулось к каноничному `@get:Rule val composeRule =
+createComposeRule()` без явного типа (вывод типа). `./gradlew test`
+теперь зелёный при любом варианте запуска.
 
 Варианты на будущее (не обязательны, по вкусу):
 1. CI запускать только debug: `./gradlew --no-daemon testDebugUnitTest` —
