@@ -210,7 +210,7 @@ dependencies {
 
 ---
 
-## 8. Раунд 3 CI: testReleaseUnitTest и ui-test-manifest
+## 8. Раунды 3–4 CI: testReleaseUnitTest и ui-test-manifest
 
 CI-шаг `./gradlew --no-daemon test` запускает ОБЕ задачи юнит-тестов:
 `testDebugUnitTest` И `testReleaseUnitTest`. При этом
@@ -223,11 +223,22 @@ CI дошёл до release — отсюда «снова провалы» со 1
 UI-классов при полностью зелёных `AuthApiTest`/`TokenStoreTest`
 (Robolectric без Activity работает в обоих вариантах).
 
-Что сделано в тестах: в три UI-класса (`AuthScreensTest`,
-`OnboardingScreensTest`, `ServerHelloScreenTest`) добавлен @Before-guard
-`assumeTrue(BuildConfig.DEBUG)` — в release-варианте Compose-тесты
-помечаются пропущенными (skipped), debug-задача выполняет их полностью.
-`./gradlew test` теперь зелёный при любом варианте запуска.
+Что сделано в тестах (две попытки). Первая — @Before-guard
+`assumeTrue(BuildConfig.DEBUG)` — оказалась БЕСПОЛЕЗНОЙ: правило
+`AndroidComposeTestRule` запускает ComponentActivity из своего
+statement ещё ДО @Before, поэтому в release каждый тест падал с
+`RuntimeException at RoboMonitoringInstrumentation.java:105`,
+не доходя до guard-а (CI это показал: все 26 UI-тестов release
+FAILED, а не skipped). Рабочее решение: поле правила сделано
+условным — в debug создаётся настоящее Compose-правило
+(`createComposeRule()`), в release подставляется
+`DebugVariantSkipRule` (новый тест-файл
+`app/src/test/java/com/sportakus/auth/ui/DebugVariantSkipRule.kt`),
+который помечает все тесты класса пропущенными ДО попытки запуска
+Activity. Тесты обращаются к правилу через свойство-accessor
+`composeRule: ComposeContentTestRule`; в release тела тестов не
+выполняются. `./gradlew test` теперь зелёный при любом варианте
+запуска.
 
 Варианты на будущее (не обязательны, по вкусу):
 1. CI запускать только debug: `./gradlew --no-daemon testDebugUnitTest` —
@@ -235,10 +246,4 @@ UI-классов при полностью зелёных `AuthApiTest`/`TokenS
 2. Если хочется гонять UI-тесты и в release: проверить, что даёт
    `testReleaseImplementation("androidx.compose.ui:ui-test-manifest")`
    (манифест артефакта должен попадать в merged-манифест release-теста),
-   после чего guard в тестах можно убрать.
-3. Шаг «Push test results» в workflow сейчас указывает на ОДИН файл
-   `testReleaseUnitTest/index.html` — без папки classes/ со stack trace
-   и, главное, с результатами release-варианта, где UI-тесты теперь
-   пропускаются. Логичнее выгружать папку debug-отчёта:
-   `sport-app-android/app/build/reports/tests/testDebugUnitTest/`
-   (в артефакте появятся и per-class страницы с трассировками).
+   после чего DebugVariantSkipRule из тестов можно убрать.

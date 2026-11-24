@@ -1,6 +1,7 @@
 package com.sportakus.auth.ui
 
 import android.content.Context
+import androidx.compose.ui.test.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -15,10 +16,10 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -36,8 +37,19 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ServerHelloScreenTest {
 
+    /**
+     * createComposeRule() запускает ComponentActivity из statement правила —
+     * ещё ДО @Before, — поэтому в release (Activity нет в манифесте:
+     * ui-test-manifest — debugImplementation) классу подставляется
+     * правило-пропуск, и все Compose-тесты варианта пропускаются.
+     */
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRuleHolder: TestRule =
+        if (BuildConfig.DEBUG) createComposeRule() else DebugVariantSkipRule()
+
+    /** Тесты работают с этим свойством; в release они не выполняются. */
+    val composeRule: ComposeContentTestRule
+        get() = composeRuleHolder as ComposeContentTestRule
 
     private lateinit var server: MockWebServer
     private lateinit var context: Context
@@ -48,18 +60,6 @@ class ServerHelloScreenTest {
         TokenStore.clear(context)
         server = MockWebServer()
         server.start()
-    }
-
-    @Before
-    fun requireDebugVariant() {
-        // Компонент ComponentActivity, который запускает createComposeRule(),
-        // регистрируется манифест-артефактом ui-test-manifest (debugImplementation).
-        // В release-варианте его нет в манифесте, поэтому Compose-тесты
-        // выполняются только для debug; в release они пропускаются.
-        assumeTrue(
-            "Compose-UI-тесты требуют debug-вариант (ui-test-manifest)",
-            BuildConfig.DEBUG
-        )
     }
 
     @After

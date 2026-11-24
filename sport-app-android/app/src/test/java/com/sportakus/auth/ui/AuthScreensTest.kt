@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.ComposeContentTestRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
@@ -21,10 +22,9 @@ import com.sportakus.auth.ui.theme.SportakusTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -46,20 +46,20 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class AuthScreensTest {
 
+    /**
+     * createComposeRule() запускает ComponentActivity из statement правила —
+     * ещё ДО @Before, — поэтому проверку варианта нельзя делать в @Before:
+     * в release Activity не зарегистрирована в манифесте (ui-test-manifest
+     * подключён как debugImplementation), и каждый тест упадёт при старте.
+     * В release классу подставляется правило-пропуск вместо Compose-правила.
+     */
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRuleHolder: TestRule =
+        if (BuildConfig.DEBUG) createComposeRule() else DebugVariantSkipRule()
 
-    @Before
-    fun requireDebugVariant() {
-        // Компонент ComponentActivity, который запускает createComposeRule(),
-        // регистрируется манифест-артефактом ui-test-manifest (debugImplementation).
-        // В release-варианте его нет в манифесте, поэтому Compose-тесты
-        // выполняются только для debug; в release они пропускаются.
-        assumeTrue(
-            "Compose-UI-тесты требуют debug-вариант (ui-test-manifest)",
-            BuildConfig.DEBUG
-        )
-    }
+    /** Тесты работают с этим свойством; в release они не выполняются. */
+    val composeRule: ComposeContentTestRule
+        get() = composeRuleHolder as ComposeContentTestRule
 
     // ------------------------------------------------------------------
     // LoginScreen
