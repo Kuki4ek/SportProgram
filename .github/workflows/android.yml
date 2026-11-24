@@ -33,7 +33,7 @@ jobs:
         run: ./gradlew --no-daemon lint
 
       - name: Run unit tests
-        run: ./gradlew --no-daemon test
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Push test results
         if: always()
