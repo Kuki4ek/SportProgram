@@ -10,6 +10,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Юнит-тесты сетевого слоя [AuthApi] поверх MockWebServer.
@@ -21,7 +24,13 @@ import org.junit.Test
  *
  * AuthApi использует блокирующий java.net.HttpURLConnection, поэтому все проверки
  * синхронные и не требуют kotlinx-coroutines-test.
+ *
+ * Тесты запускаются под Robolectric: AuthApi собирает тела запросов через
+ * android-класс org.json.JSONObject, чьи методы в plain-JVM — заглушки
+ * («Method ... not mocked»). Robolectric даёт настоящую реализацию org.json.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class AuthApiTest {
 
     private lateinit var server: MockWebServer

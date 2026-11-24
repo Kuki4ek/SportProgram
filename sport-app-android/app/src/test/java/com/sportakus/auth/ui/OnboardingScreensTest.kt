@@ -3,9 +3,11 @@ package com.sportakus.auth.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import com.sportakus.auth.ui.theme.SportakusTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -292,7 +294,9 @@ class OnboardingScreensTest {
         composeRule.onNodeWithText("Планка").assertExists()
         composeRule.onNodeWithText("Прогулка").assertExists()
 
-        composeRule.onNodeWithText("Вернуться к авторизации").performClick()
+        // Клик по семантическому действию: кнопка ниже вьюпорта Robolectric-окна
+        // не получает синтезированное касание из performClick().
+        composeRule.onNodeWithText("Вернуться к авторизации").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.runOnIdle { assertTrue(backToAuth) }
     }
 }

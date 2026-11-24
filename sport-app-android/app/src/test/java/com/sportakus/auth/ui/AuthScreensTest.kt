@@ -3,6 +3,7 @@ package com.sportakus.auth.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import com.sportakus.auth.ui.theme.SportakusTheme
 import org.junit.Assert.assertEquals
@@ -109,15 +111,18 @@ class AuthScreensTest {
 
         // Кнопка входа — единственный КЛИКАБЕЛЬНЫЙ узел с текстом «Войти»
         // (заголовок «Войти» не обрабатывает клики).
+        // Клик выполняется через семантическое действие, а не performClick():
+        // окно Robolectric по умолчанию маленькое (320x480), и кнопки ниже
+        // вьюпорта не получают синтезированное касание.
         val loginButton = composeRule.onAllNodes(hasText("Войти") and hasClickAction())
         loginButton.assertCountEquals(1)
-        loginButton.onFirst().performClick()
+        loginButton.onFirst().performSemanticsAction(SemanticsActions.OnClick)
 
-        composeRule.onNodeWithText("Забыли пароль?").performClick()
-        composeRule.onNodeWithText("Регистрация").performClick()
-        composeRule.onNodeWithText("Войти через Google").performClick()
-        composeRule.onNodeWithText("Войти через Яндекс").performClick()
-        composeRule.onNodeWithText("Войти через почту").performClick()
+        composeRule.onNodeWithText("Забыли пароль?").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Регистрация").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Войти через Google").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Войти через Яндекс").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Войти через почту").performSemanticsAction(SemanticsActions.OnClick)
 
         composeRule.runOnIdle {
             assertTrue("Кнопка «Войти» должна вызывать onLogin", loginClicked)
@@ -336,13 +341,15 @@ class AuthScreensTest {
         }
 
         // Кнопка — единственный кликабельный узел с текстом «Регистрация».
+        // Клик по семантическому действию: кнопки/ссылки ниже вьюпорта
+        // Robolectric-окна не получают синтезированное касание из performClick().
         val registerButton = composeRule.onAllNodes(hasText("Регистрация") and hasClickAction())
         registerButton.assertCountEquals(1)
-        registerButton.onFirst().performClick()
+        registerButton.onFirst().performSemanticsAction(SemanticsActions.OnClick)
 
-        composeRule.onNodeWithText("Забыли пароль?").performClick()
-        composeRule.onNodeWithText("Войти").performClick()
-        composeRule.onNodeWithText("Регистрация через Google").performClick()
+        composeRule.onNodeWithText("Забыли пароль?").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Войти").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Регистрация через Google").performSemanticsAction(SemanticsActions.OnClick)
 
         composeRule.runOnIdle {
             assertTrue("Кнопка «Регистрация» должна вызывать onRegister", registerClicked)
