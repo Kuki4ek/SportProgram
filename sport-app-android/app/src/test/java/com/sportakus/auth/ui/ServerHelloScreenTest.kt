@@ -6,7 +6,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
-import com.sportakus.auth.BuildConfig
 import com.sportakus.auth.data.token.TokenStore
 import com.sportakus.auth.ui.theme.SportakusTheme
 import okhttp3.mockwebserver.MockResponse
@@ -16,11 +15,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.ClassRule
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.ExternalResource
-import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -37,20 +33,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ServerHelloScreenTest {
-
-    companion object {
-        /**
-         * Compose-UI-тестам нужен ComponentActivity из ui-test-manifest
-         * (debugImplementation). AndroidComposeTestRule запускает Activity
-         * из statement правила — ещё до @Before, — поэтому в release-варианте
-         * класс пропускается целиком на уровне ClassRule: он выполняется
-         * раньше правил уровня метода, и Activity не пытается запуститься.
-         */
-        @ClassRule
-        @JvmField
-        val debugVariantGuard: TestRule =
-            if (BuildConfig.DEBUG) ExternalResource() else DebugVariantSkipRule()
-    }
 
     @get:Rule
     val composeRule = createComposeRule()

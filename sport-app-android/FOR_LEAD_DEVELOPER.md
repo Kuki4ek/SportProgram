@@ -210,7 +210,7 @@ dependencies {
 
 ---
 
-## 8. Раунды 3–5 CI: testReleaseUnitTest и ui-test-manifest
+## 8. Раунды 3–6 CI: release-вариант юнит-тестов отключён
 
 CI-шаг `./gradlew --no-daemon test` запускает ОБЕ задачи юнит-тестов:
 `testDebugUnitTest` И `testReleaseUnitTest`. При этом
@@ -223,35 +223,33 @@ CI дошёл до release — отсюда «снова провалы» со 1
 UI-классов при полностью зелёных `AuthApiTest`/`TokenStoreTest`
 (Robolectric без Activity работает в обоих вариантах).
 
-Что сделано в тестах (три попытки). Первая — @Before-guard
-`assumeTrue(BuildConfig.DEBUG)` — оказалась БЕСПОЛЕЗНОЙ: правило
-`AndroidComposeTestRule` запускает ComponentActivity из своего
-statement ещё ДО @Before, поэтому в release каждый тест падал с
-`RuntimeException at RoboMonitoringInstrumentation.java:105`,
-не доходя до guard-а (CI это показал: все 26 UI-тестов release
-FAILED, а не skipped). Вторая — условное поле правила + accessor
-`composeRule: ComposeContentTestRule` — не СКОМПИЛИРОВАЛАСЬ:
-тип `androidx.compose.ui.test.ComposeContentTestRule` не входит
-в публичный API compose 1.5.0 (Unresolved reference;
-`compileDebugUnitTestKotlin` FAILED — см. лог раунда 4).
-Рабочее решение: ClassRule-guard. В каждом UI-классе добавлен
-companion-объект с `@ClassRule @JvmField val debugVariantGuard:
-TestRule = if (BuildConfig.DEBUG) ExternalResource() else
-DebugVariantSkipRule()` (правило-пропуск — новый тест-файл
-`app/src/test/java/com/sportakus/auth/ui/DebugVariantSkipRule.kt`,
-его statement бросает AssumptionViolatedException). ClassRule
-выполняется РАНЬШЕ правил уровня метода: в release класс
-пропускается целиком до какой-либо попытки запустить Activity
-(ни createComposeRule(), ни statement Compose-правила не
-выполняются), в debug guard — no-op. Само Compose-правило
-вернулось к каноничному `@get:Rule val composeRule =
-createComposeRule()` без явного типа (вывод типа). `./gradlew test`
-теперь зелёный при любом варианте запуска.
+Что было перепробовано (три попытки, все неудачны):
+1. @Before-guard `assumeTrue(BuildConfig.DEBUG)` — БЕСПОЛЕЗЕН: правило
+   `AndroidComposeTestRule` запускает ComponentActivity из своего
+   statement ещё ДО @Before; в release каждый тест падал с
+   `RuntimeException at RoboMonitoringInstrumentation.java:105`,
+   не доходя до guard-а (26 UI-тестов FAILED, а не skipped).
+2. Условное поле правила + accessor `composeRule: ComposeContentTestRule` —
+   НЕ СКОМПИЛИРОВАЛОСЬ: тип не входит в публичный API compose 1.5.0
+   (Unresolved reference; `compileDebugUnitTestKotlin` FAILED).
+3. ClassRule-guard `if (BuildConfig.DEBUG) ExternalResource() else
+   DebugVariantSkipRule()` — тоже НЕ СКОМПИЛИРОВАЛСЯ:
+   `org.junit.rules.ExternalResource` в JUnit 4.13.2 — АБСТРАКТНЫЙ класс,
+   «Cannot create an instance of an abstract class» на строке guard-а
+   во всех трёх UI-файлах (сломалась и debug-компиляция тестов).
 
-Варианты на будущее (не обязательны, по вкусу):
-1. CI запускать только debug: `./gradlew --no-daemon testDebugUnitTest` —
-   стандартная практика; release-вариант юнит-тестов всё равно дублирует debug.
-2. Если хочется гонять UI-тесты и в release: проверить, что даёт
-   `testReleaseImplementation("androidx.compose.ui:ui-test-manifest")`
-   (манифест артефакта должен попадать в merged-манифест release-теста),
-   после чего DebugVariantSkipRule из тестов можно убрать.
+ИТОГ (продуктовое решение заказчика): релизные юнит-тесты полностью
+отключены. Вся guard-механика удалена из тестов, файл
+`DebugVariantSkipRule.kt` удалён; UI-тесты вернулись к канонической
+форме `@get:Rule val composeRule = createComposeRule()` — последняя
+доказанно зелёная конфигурация (debug CI: 61 тест / 0 провалов).
+
+КРИТИЧНО для workflow: запускать только debug-задачу —
+`./gradlew --no-daemon testDebugUnitTest` вместо `./gradlew --no-daemon test`
+(одна строка). Иначе `testReleaseUnitTest` упадёт на старте Activity
+(RoboMonitoringInstrumentation) и job будет красным, даже если debug зелёный.
+
+Если в будущем понадобятся UI-тесты в release: добавить
+`testReleaseImplementation("androidx.compose.ui:ui-test-manifest")`
+(манифест попадёт в merged-манифест release-теста) — после этого
+никакие guards не нужны вовсе.
