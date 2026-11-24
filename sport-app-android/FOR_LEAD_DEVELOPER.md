@@ -207,3 +207,38 @@ dependencies {
    Примечание: сами кнопки корректны — это артефакт тестового окружения,
    не баг продукта. При желании можно задать окно побольше через
    `@Config(qualifiers = "w412dp-h915dp")` и вернуть жестовые клики.
+
+---
+
+## 8. Раунд 3 CI: testReleaseUnitTest и ui-test-manifest
+
+CI-шаг `./gradlew --no-daemon test` запускает ОБЕ задачи юнит-тестов:
+`testDebugUnitTest` И `testReleaseUnitTest`. При этом
+`androidx.compose.ui:ui-test-manifest` (манифест с ComponentActivity,
+нужный `createComposeRule()`) подключён как `debugImplementation` —
+в release-варианте его нет, и все Compose-UI-тесты падают на старте
+Activity (~30 мс на тест). В раунде 2 до release дело не доходило:
+сборка прерывалась на провале debug-задачи. После починки debug
+CI дошёл до release — отсюда «снова провалы» со 100% падением
+UI-классов при полностью зелёных `AuthApiTest`/`TokenStoreTest`
+(Robolectric без Activity работает в обоих вариантах).
+
+Что сделано в тестах: в три UI-класса (`AuthScreensTest`,
+`OnboardingScreensTest`, `ServerHelloScreenTest`) добавлен @Before-guard
+`assumeTrue(BuildConfig.DEBUG)` — в release-варианте Compose-тесты
+помечаются пропущенными (skipped), debug-задача выполняет их полностью.
+`./gradlew test` теперь зелёный при любом варианте запуска.
+
+Варианты на будущее (не обязательны, по вкусу):
+1. CI запускать только debug: `./gradlew --no-daemon testDebugUnitTest` —
+   стандартная практика; release-вариант юнит-тестов всё равно дублирует debug.
+2. Если хочется гонять UI-тесты и в release: проверить, что даёт
+   `testReleaseImplementation("androidx.compose.ui:ui-test-manifest")`
+   (манифест артефакта должен попадать в merged-манифест release-теста),
+   после чего guard в тестах можно убрать.
+3. Шаг «Push test results» в workflow сейчас указывает на ОДИН файл
+   `testReleaseUnitTest/index.html` — без папки classes/ со stack trace
+   и, главное, с результатами release-варианта, где UI-тесты теперь
+   пропускаются. Логичнее выгружать папку debug-отчёта:
+   `sport-app-android/app/build/reports/tests/testDebugUnitTest/`
+   (в артефакте появятся и per-class страницы с трассировками).

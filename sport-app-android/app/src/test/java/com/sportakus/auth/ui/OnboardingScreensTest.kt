@@ -8,9 +8,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import com.sportakus.auth.BuildConfig
 import com.sportakus.auth.ui.theme.SportakusTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +35,18 @@ class OnboardingScreensTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Before
+    fun requireDebugVariant() {
+        // Компонент ComponentActivity, который запускает createComposeRule(),
+        // регистрируется манифест-артефактом ui-test-manifest (debugImplementation).
+        // В release-варианте его нет в манифесте, поэтому Compose-тесты
+        // выполняются только для debug; в release они пропускаются.
+        assumeTrue(
+            "Compose-UI-тесты требуют debug-вариант (ui-test-manifest)",
+            BuildConfig.DEBUG
+        )
+    }
 
     // ------------------------------------------------------------------
     // SafetyNoteScreen

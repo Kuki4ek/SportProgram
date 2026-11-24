@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
+import com.sportakus.auth.BuildConfig
 import com.sportakus.auth.data.token.TokenStore
 import com.sportakus.auth.ui.theme.SportakusTheme
 import okhttp3.mockwebserver.MockResponse
@@ -14,6 +15,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -46,6 +48,18 @@ class ServerHelloScreenTest {
         TokenStore.clear(context)
         server = MockWebServer()
         server.start()
+    }
+
+    @Before
+    fun requireDebugVariant() {
+        // Компонент ComponentActivity, который запускает createComposeRule(),
+        // регистрируется манифест-артефактом ui-test-manifest (debugImplementation).
+        // В release-варианте его нет в манифесте, поэтому Compose-тесты
+        // выполняются только для debug; в release они пропускаются.
+        assumeTrue(
+            "Compose-UI-тесты требуют debug-вариант (ui-test-manifest)",
+            BuildConfig.DEBUG
+        )
     }
 
     @After
