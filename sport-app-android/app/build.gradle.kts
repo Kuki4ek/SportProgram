@@ -44,6 +44,12 @@ android {
         // Compose Compiler 1.5.1 is compatible with Kotlin 1.9.0.
         kotlinCompilerExtensionVersion = "1.5.1"
     }
+	
+	testOptions {
+		unitTests {
+			isIncludeAndroidResources = true
+    }
+}
 }
 
 dependencies {
@@ -58,4 +64,24 @@ dependencies {
     implementation("com.googlecode.libphonenumber:libphonenumber:9.0.41")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+	
+	// JUnit 4
+	testImplementation("junit:junit:4.13.2")
+
+	// Robolectric
+	testImplementation("org.robolectric:robolectric:4.11.1")
+
+	// MockWebServer
+	testImplementation("com.squareup.okhttp3:mockwebserver:4.11.0")
+
+	// AndroidX Test
+	testImplementation("androidx.test:core-ktx:1.5.0")
+	testImplementation("androidx.test.ext:junit:1.1.5")
+
+	// Compose UI Testing
+	testImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
+	testImplementation("androidx.compose.ui:ui-test-junit4")
+
+	// Compose UI Test Manifest
+	debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

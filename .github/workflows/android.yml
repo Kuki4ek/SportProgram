@@ -33,7 +33,15 @@ jobs:
         run: ./gradlew --no-daemon lint
 
       - name: Run unit tests
-        run: ./gradlew --no-daemon test
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Push test results
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: test-results-html
+          path: sport-app-android/app/build/reports/tests/testDebugUnitTest/index.html
+          if-no-files-found: warn
 
   build-debug:
     runs-on: ubuntu-latest

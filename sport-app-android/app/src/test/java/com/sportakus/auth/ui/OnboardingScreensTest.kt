@@ -1,149 +1,302 @@
 package com.sportakus.auth.ui
 
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import com.sportakus.auth.ui.theme.SportakusAuthTheme
+import androidx.compose.ui.test.performSemanticsAction
+import com.sportakus.auth.ui.theme.SportakusTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+/**
+ * UI-тесты онбординг-экранов.
+ *
+ * Выбор в опросниках кодируется строкой «опция1|опция2»
+ * (см. QuestionnaireOptionsScreen.selectedEncoded), поэтому тесты
+ * проверяют именно строковое кодирование в onSelectionChange.
+ *
+ * Требуемые зависимости — см. FOR_LEAD_DEVELOPER.md.
+ */
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class OnboardingScreensTest {
 
     @get:Rule
-    val composeTestRule = createComposeRule()
+    val composeRule = createComposeRule()
+
+    // ------------------------------------------------------------------
+    // SafetyNoteScreen
+    // ------------------------------------------------------------------
 
     @Test
-    fun `SafetyNoteScreen displays warning text and triggers onConfirm`() {
-        var confirmed = false
+    fun safetyNoteScreenShowsMemoAndAcknowledges() {
+        var acknowledged = false
 
-        composeTestRule.setContent {
-            SportakusAuthTheme {
-                SafetyNoteScreen(onConfirm = { confirmed = true })
+        composeRule.setContent {
+            SportakusTheme {
+                SafetyNoteScreen(
+                    darkTheme = false,
+                    onAcknowledge = { acknowledged = true }
+                )
             }
         }
 
-        composeTestRule.onNodeWithText("Примечание!").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Хорошо").performClick()
-        assertTrue(confirmed)
+        composeRule.onNodeWithText("Памятка").assertExists()
+        composeRule.onNodeWithText("Запомнил").performClick()
+        composeRule.runOnIdle { assertTrue(acknowledged) }
     }
 
+    // ------------------------------------------------------------------
+    // IntroScreen
+    // ------------------------------------------------------------------
+
     @Test
-    fun `QuestionnaireOptionsScreen enforces singleSelection and maxSelections rules`() {
-        var currentSelections = listOf<String>()
+    fun introScreenButtonsTriggerCallbacks() {
+        var started = false
+        var skipped = false
+
+        composeRule.setContent {
+            SportakusTheme {
+                IntroScreen(
+                    onStart = { started = true },
+                    onSkip = { skipped = true }
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Мы помогаем отслеживать физическую активность и выполнять игровые задания.").assertExists()
+        composeRule.onNodeWithText("Пропустить").performClick()
+        composeRule.onNodeWithText("Начнем").performClick()
+        composeRule.runOnIdle {
+            assertTrue("Кнопка «Пропустить» должна вызывать onSkip", skipped)
+            assertTrue("Кнопка «Начнем» должна вызывать onStart", started)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // QuestionnaireOptionsScreen
+    // ------------------------------------------------------------------
+
+    @Test
+    fun questionnaireMultiSelectionRespectsMaxSelections() {
+        var selected by mutableStateOf("Похудеть")
         var nextClicked = false
 
-        composeTestRule.setContent {
-            SportakusAuthTheme {
+        composeRule.setContent {
+            SportakusTheme {
                 QuestionnaireOptionsScreen(
-                    title = "Какая у вас цель?",
-                    subtitle = "Выберите до 2 целей",
-                    options = listOf("Похудеть", "Накачаться", "Развить силу"),
-                    selectedValues = listOf("Похудеть", "Накачаться"),
-                    onSelectionChange = { currentSelections = it },
+                    question = "Что для тебя спорт?",
+                    options = listOf("Похудеть", "Накачаться", "Быть в форме"),
+                    selectedEncoded = selected,
+                    onSelectionChange = { selected = it },
+                    progress = 1,
                     onBack = {},
                     onNext = { nextClicked = true },
+                    multiple = true,
                     maxSelections = 2
                 )
             }
         }
 
-        // Попытка выбрать третью опцию при лимите maxSelections = 2 не должна добавлять её
-        composeTestRule.onNodeWithText("Развить силу").performClick()
-        assertEquals(emptyList<String>(), currentSelections)
+        composeRule.onNodeWithText("Что для тебя спорт?").assertExists()
+        composeRule.onNodeWithText("Давай узнаем друг друга получше").assertExists()
 
-        // Снятие выделения с уже выбранной опции должно сработать
-        composeTestRule.onNodeWithText("Похудеть").performClick()
-        assertEquals(listOf("Накачаться"), currentSelections)
+        // Вторая опция добавляется к выбранной через «|».
+        composeRule.onNodeWithText("Накачаться").performClick()
+        composeRule.runOnIdle { assertEquals("Похудеть|Накачаться", selected) }
 
-        composeTestRule.onNodeWithText("Далее").performClick()
-        assertTrue(nextClicked)
+        // Лимит достигнут (maxSelections = 2): третий выбор игнорируется.
+        composeRule.onNodeWithText("Быть в форме").performClick()
+        composeRule.runOnIdle { assertEquals("Похудеть|Накачаться", selected) }
+
+        // Повторный клик по выбранной опции снимает её.
+        composeRule.onNodeWithText("Накачаться").performClick()
+        composeRule.runOnIdle { assertEquals("Похудеть", selected) }
+
+        composeRule.onNodeWithText("Следующее").performClick()
+        composeRule.runOnIdle { assertTrue(nextClicked) }
     }
 
     @Test
-    fun `BodyMetricsScreen displays height and weight and updates on button clicks`() {
-        var height = 175
-        var weight = 70
+    fun questionnaireSingleSelectionReplacesValue() {
+        var selected by mutableStateOf("")
 
-        composeTestRule.setContent {
-            SportakusAuthTheme {
+        composeRule.setContent {
+            SportakusTheme {
+                QuestionnaireOptionsScreen(
+                    question = "Что для тебя спорт?",
+                    options = listOf("Похудеть", "Накачаться"),
+                    selectedEncoded = selected,
+                    onSelectionChange = { selected = it },
+                    progress = 1,
+                    onBack = {},
+                    onNext = {},
+                    multiple = false
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Похудеть").performClick()
+        composeRule.runOnIdle { assertEquals("Похудеть", selected) }
+
+        // Одиночный выбор заменяет прежнее значение, а не добавляет.
+        composeRule.onNodeWithText("Накачаться").performClick()
+        composeRule.runOnIdle { assertEquals("Накачаться", selected) }
+    }
+
+    // ------------------------------------------------------------------
+    // BodyMetricsScreen
+    // ------------------------------------------------------------------
+
+    @Test
+    fun bodyMetricsScreenShowsCurrentValuesAndForwardsNext() {
+        var nextClicked = false
+
+        composeRule.setContent {
+            SportakusTheme {
                 BodyMetricsScreen(
-                    heightCm = height,
-                    weightKg = weight,
-                    onHeightChange = { height = it },
-                    onWeightChange = { weight = it },
+                    height = "175",
+                    onHeightChange = {},
+                    weight = "70",
+                    onWeightChange = {},
+                    onBack = {},
+                    onNext = { nextClicked = true }
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Расскажите о себе").assertExists()
+        composeRule.onNodeWithText("Рост").assertExists()
+        composeRule.onNodeWithText("175 см").assertExists()
+        composeRule.onNodeWithText("Вес").assertExists()
+        composeRule.onNodeWithText("70 кг").assertExists()
+        composeRule.onNodeWithText("Выберите поле, затем прокрутите шкалу и нажмите «ОК».").assertExists()
+
+        composeRule.onNodeWithText("Следующее").performClick()
+        composeRule.runOnIdle { assertTrue(nextClicked) }
+    }
+
+    @Test
+    fun bodyMetricsScreenShowsPlaceholdersWhenBlank() {
+        composeRule.setContent {
+            SportakusTheme {
+                BodyMetricsScreen(
+                    height = "",
+                    onHeightChange = {},
+                    weight = "",
+                    onWeightChange = {},
                     onBack = {},
                     onNext = {}
                 )
             }
         }
 
-        composeTestRule.onNodeWithText("Рост: 175 см").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Вес: 70 кг").assertIsDisplayed()
+        composeRule.onNodeWithText("Выберите рост").assertExists()
+        composeRule.onNodeWithText("Выберите вес").assertExists()
     }
 
-    @Test
-    fun `BirthDateScreen switches gender and adjusts day when month changes to shorter month`() {
-        var selectedGender = "Мужской"
-        var selectedDay = 31
-        var selectedMonth = 1
-        var selectedYear = 2023
+    // ------------------------------------------------------------------
+    // BirthDateScreen
+    // ------------------------------------------------------------------
 
-        composeTestRule.setContent {
-            SportakusAuthTheme {
+    @Test
+    fun birthDateScreenGenderSelectionFlow() {
+        var gender by mutableStateOf("")
+        var nextClicked = false
+
+        composeRule.setContent {
+            SportakusTheme {
                 BirthDateScreen(
-                    gender = selectedGender,
-                    day = selectedDay,
-                    month = selectedMonth,
-                    year = selectedYear,
-                    onGenderChange = { selectedGender = it },
-                    onDayChange = { selectedDay = it },
-                    onMonthChange = { selectedMonth = it },
-                    onYearChange = { selectedYear = it },
+                    day = "15",
+                    month = "Март",
+                    year = "2000",
+                    gender = gender,
+                    onGenderChange = { gender = it },
+                    onDateChange = { _, _, _ -> },
+                    onBack = {},
+                    onNext = { nextClicked = true }
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("День рождения").assertExists()
+        composeRule.onNodeWithText("15 Март 2000").assertExists()
+        composeRule.onNodeWithText("Выберите пол").assertExists()
+
+        // Раскрываем список пола и выбираем «Женщина».
+        composeRule.onNodeWithText("Выберите пол").performClick()
+        composeRule.onNodeWithText("Мужчина").assertExists()
+        composeRule.onNodeWithText("Женщина").assertExists()
+        composeRule.onNodeWithText("Не указывать").assertExists()
+
+        composeRule.onNodeWithText("Женщина").performClick()
+        composeRule.runOnIdle { assertEquals("Женщина", gender) }
+
+        // После выбора список сворачивается, значение показывается в поле.
+        composeRule.onNodeWithText("Женщина").assertExists()
+        composeRule.onNodeWithText("Мужчина").assertDoesNotExist()
+
+        composeRule.onNodeWithText("Следующее").performClick()
+        composeRule.runOnIdle { assertTrue(nextClicked) }
+    }
+
+    @Test
+    fun birthDateScreenOpensDateWheel() {
+        composeRule.setContent {
+            SportakusTheme {
+                BirthDateScreen(
+                    day = "15",
+                    month = "Март",
+                    year = "2000",
+                    gender = "",
+                    onGenderChange = {},
+                    onDateChange = { _, _, _ -> },
                     onBack = {},
                     onNext = {}
                 )
             }
         }
 
-        composeTestRule.onNodeWithText("Женский").performClick()
-        assertEquals("Женский", selectedGender)
-
-        // Переключение месяца с 1 (январь, 31 день) на 2 (февраль 2023, 28 дней) должно скорректировать день до 28
-        composeTestRule.onNodeWithText("Месяц +").performClick()
-        assertEquals(2, selectedMonth)
-        assertEquals(28, selectedDay)
+        composeRule.onNodeWithText("День рождения").performClick()
+        composeRule.onNodeWithText("Прокрутите колонки и остановите нужные значения по центру.").assertExists()
+        composeRule.onNodeWithText("День").assertExists()
+        composeRule.onNodeWithText("Месяц").assertExists()
+        composeRule.onNodeWithText("Год").assertExists()
+        composeRule.onNodeWithText("ОК").assertExists()
     }
 
-    @Test
-    fun `DemoGuestHome displays collected profile summary and triggers restart`() {
-        var restarted = false
+    // ------------------------------------------------------------------
+    // DemoGuestHome
+    // ------------------------------------------------------------------
 
-        composeTestRule.setContent {
-            SportakusAuthTheme {
-                DemoGuestHome(
-                    goals = listOf("Похудеть", "Развить выносливость"),
-                    workoutPlace = "Дома",
-                    weeklyFrequency = "3 раза",
-                    heightCm = 180,
-                    weightKg = 75,
-                    gender = "Мужской",
-                    birthDate = "15.06.2000",
-                    onRestart = { restarted = true }
-                )
+    @Test
+    fun demoGuestHomeShowsTasksAndReturnsToAuth() {
+        var backToAuth = false
+
+        composeRule.setContent {
+            SportakusTheme {
+                DemoGuestHome(onBackToAuth = { backToAuth = true })
             }
         }
 
-        composeTestRule.onNodeWithText("Анкета завершена").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Цели: Похудеть, Развить выносливость").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Параметры: 180 см / 75 кг").assertIsDisplayed()
+        composeRule.onNodeWithText("Твой спорт — твоя игра.").assertExists()
+        composeRule.onNodeWithText("Задания на сегодня").assertExists()
+        composeRule.onNodeWithText("Бег").assertExists()
+        composeRule.onNodeWithText("Планка").assertExists()
+        composeRule.onNodeWithText("Прогулка").assertExists()
 
-        composeTestRule.onNodeWithText("Пройти сценарий заново").performClick()
-        assertTrue(restarted)
+        // Клик по семантическому действию: кнопка ниже вьюпорта Robolectric-окна
+        // не получает синтезированное касание из performClick().
+        composeRule.onNodeWithText("Вернуться к авторизации").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.runOnIdle { assertTrue(backToAuth) }
     }
 }
