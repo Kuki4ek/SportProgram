@@ -76,6 +76,11 @@ namespace sport_app_server
                 checkResult.error = true;
                 checkResult.errorMessage = "Имя пользователя содержит недопустимые символы";
             }
+            else if (!ContainsChar(login, lettersChars) && !ContainsChar(login, lettersChars.ToUpper()))
+            {
+                checkResult.error = true;
+                checkResult.errorMessage = "Имя пользователя обязательно должно содержать латинский символ";
+            }
             return checkResult;
         }
         public static CheckResult CheckNickname(string nickname)
