@@ -131,7 +131,7 @@ namespace sport_app_server
                 checkResult.error = true;
                 checkResult.errorMessage = "Пароль должен содержать как минимум одну цифру";
             }
-            else if (!ContainsChar(password, specialChars))
+            else if (!ContainsChar(password, specialChars) && !ContainsChar(password, "_"))
             {
                 checkResult.error = true;
                 checkResult.errorMessage = "Пароль должен содержать как минимум один специальный символ";
